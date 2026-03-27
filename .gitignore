@@ -1,10 +1,10 @@
 # Ignore data contents but keep folder structure
-data/**
-!data/.gitkeep
+plant_disease_cnn_replication/data/**
+!plant_disease_cnn_replication/data/.gitkeep
 
 # Ignore outputs but keep folder
-outputs/**
-!outputs/.gitkeep
+plant_disease_cnn_replication/outputs/**
+!plant_disease_cnn_replication/outputs/.gitkeep
 
 # TFDS
 _tfds_logging/
