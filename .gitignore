@@ -1,10 +1,20 @@
+# Ignore data contents but keep folder structure
+data/**
+!data/.gitkeep
+
+# Ignore outputs but keep folder
+outputs/**
+!outputs/.gitkeep
+
+# TFDS
+_tfds_logging/
+
+# Python
 venv/
-data/
-outputs/
 __pycache__/
 *.pyc
 .env
-.zip
+
+# Dataset archives
 Rice Leaf Disease Images.7z
 cassava-disease.zip
-
