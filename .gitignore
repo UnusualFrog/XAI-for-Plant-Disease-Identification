@@ -1,0 +1,10 @@
+venv/
+data/
+outputs/
+__pycache__/
+*.pyc
+.env
+.zip
+Rice Leaf Disease Images.7z
+cassava-disease.zip
+
