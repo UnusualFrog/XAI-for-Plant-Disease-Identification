@@ -46,12 +46,14 @@ LEARNING_RATE = 1e-3
 # NOTE: dropout rate not stated, 0.5 used as default
 DROPOUT_RATE = 0.5
 # Directory to output results of training
-OUTPUT_DIR = "./results"
+OUTPUT_DIR = "./outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Helper functions
 
-def make_callbacks(dataset_name, fold = None):
+# FIX: Added monitor parameter so Cassava can use val_loss instead of val_accuracy
+# due to class imbalance making val_accuracy an unreliable checkpoint signal
+def make_callbacks(dataset_name, fold=None, monitor="val_accuracy"):
     # Set filename to dataset with current fold if available
     tag = dataset_name if fold is None else f"{dataset_name}_fold{fold}"
     # Set output file path for current dataset
@@ -61,7 +63,7 @@ def make_callbacks(dataset_name, fold = None):
         # Save model with best validation accuracy
         tf.keras.callbacks.ModelCheckpoint(
             filepath=ckpt_path,
-            monitor="val_accuracy",
+            monitor=monitor,
             save_best_only=True,
             verbose=0,
         ),
@@ -114,10 +116,13 @@ def evaluate_and_report(model, val_ds, dataset_name, num_classes, fold = None):
     tag = dataset_name if fold is None else f"{dataset_name}_fold{fold}"
 
     # Collect ground-truth labels and predictions
-    preds = model.predict(val_ds, verbose=0)
-    y_pred = np.argmax(preds, axis=1)
-
-    y_true = np.concatenate([y.numpy() for _, y in val_ds])
+    # FIX: Collect predictions and labels in a single pass to avoid ordering
+    # mismatch between two separate iterations over val_ds
+    y_true, y_pred = [], []
+    for images, labels in val_ds:
+        preds = model.predict(images, verbose=0)
+        y_pred.extend(np.argmax(preds, axis=1))
+        y_true.extend(labels.numpy())
 
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
@@ -168,17 +173,20 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes):
     print(f"\n{'='*60}")
     print(f"Training on {dataset_name} ({num_classes} classes)")
     print(f"{'='*60}")
-    
+
     # Create blank model
     model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
     model = compile_model(model)
+
+    # FIX: Use val_loss monitor for Cassava due to class imbalance
+    monitor = "val_loss" if dataset_name == "cassava" else "val_accuracy"
 
     # Train model on training data
     history = model.fit(
         train_ds,
         validation_data=val_ds,
         epochs=EPOCHS,
-        callbacks=make_callbacks(dataset_name),
+        callbacks=make_callbacks(dataset_name, monitor=monitor),
         verbose=1,
     )
 
@@ -188,7 +196,7 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes):
     # Load best checkpoint for evaluation
     best_path = os.path.join(OUTPUT_DIR, f"best_{dataset_name}.keras")
     if os.path.exists(best_path):
-        model.load_weights(best_path)
+        model = tf.keras.models.load_model(best_path)
 
     # Evaluate model and compare training metrics to validation metrics
     summary = evaluate_and_report(model, val_ds, dataset_name, num_classes)
@@ -205,7 +213,10 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
         data_dir,
         image_size=(256, 256),
         batch_size=None,
-        shuffle=False,
+        # FIX: shuffle=True required to distribute classes across folds;
+        # shuffle=False loads in filesystem/alphabetical order causing each
+        # fold to contain predominantly one class
+        shuffle=True,
         seed=SEED,
         label_mode="int",
     )
@@ -220,6 +231,12 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
     full_ds = full_ds.cache()
     total = sum(1 for _ in full_ds)
     fold_size = total // N_FOLDS
+
+    # FIX: Shuffle once with reshuffle_each_iteration=False so fold boundaries
+    # are consistent across epochs; without this the order changes each epoch
+    full_ds = full_ds.shuffle(
+        buffer_size=total, seed=SEED, reshuffle_each_iteration=False
+    )
 
     fold_summaries = []
 
@@ -248,12 +265,15 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
         model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
         model = compile_model(model)
 
+        # FIX: Use val_loss monitor for Cassava due to class imbalance
+        monitor = "val_loss" if dataset_name == "cassava" else "val_accuracy"
+
         # train model on training data
         history = model.fit(
             train_ds,
             validation_data=val_ds,
             epochs=EPOCHS,
-            callbacks=make_callbacks(dataset_name, fold=fold + 1),
+            callbacks=make_callbacks(dataset_name, fold=fold + 1, monitor=monitor),
             verbose=1,
         )
 
@@ -264,7 +284,7 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
         best_path = os.path.join(OUTPUT_DIR, f"best_{dataset_name}_fold{fold+1}.keras")
         # Check if best performing model exists
         if os.path.exists(best_path):
-            model.load_weights(best_path)
+            model = tf.keras.models.load_model(best_path)
 
         # Evalute model using best performing fold
         summary = evaluate_and_report(
@@ -304,6 +324,12 @@ def kfold_plantvillage(num_classes):
     # Get fold split size
     fold_size = total // N_FOLDS
     fold_summaries = []
+
+    # FIX: Shuffle once with reshuffle_each_iteration=False so fold boundaries
+    # are consistent across epochs
+    full_ds = full_ds.shuffle(
+        buffer_size=total, seed=SEED, reshuffle_each_iteration=False
+    )
 
     # Loop through folds
     for fold in range(N_FOLDS):
@@ -348,7 +374,7 @@ def kfold_plantvillage(num_classes):
             OUTPUT_DIR, f"best_plantvillage_fold{fold+1}.keras"
         )
         if os.path.exists(best_path):
-            model.load_weights(best_path)
+            model = tf.keras.models.load_model(best_path)
 
         # Evalute best performing model
         summary = evaluate_and_report(
@@ -357,6 +383,23 @@ def kfold_plantvillage(num_classes):
         )
 
         fold_summaries.append(summary)
+
+    # FIX: Save aggregate k-fold results to JSON matching kfold_local_dataset output
+    accuracies = [s["accuracy"] for s in fold_summaries]
+    print(f"\n[plantvillage] K-Fold Results:")
+    print(f"  Per-fold accuracies: {[f'{a:.4f}' for a in accuracies]}")
+    print(f"  Mean: {np.mean(accuracies):.4f} | Std: {np.std(accuracies):.4f}")
+    print(f"  Range: {np.min(accuracies):.4f} – {np.max(accuracies):.4f}")
+
+    with open(os.path.join(OUTPUT_DIR, "kfold_plantvillage.json"), "w") as f:
+        json.dump({
+            "dataset": "plantvillage",
+            "fold_summaries": fold_summaries,
+            "mean_accuracy": float(np.mean(accuracies)),
+            "std_accuracy": float(np.std(accuracies)),
+            "min_accuracy": float(np.min(accuracies)),
+            "max_accuracy": float(np.max(accuracies)),
+        }, f, indent=2)
 
     return fold_summaries
 
@@ -387,9 +430,11 @@ if __name__ == "__main__":
     )
 
     #K-Fold cross-validation
-    kfold_plantvillage(NUM_CLASSES["plantvillage"])
-    kfold_local_dataset("rice", RICE_DATA_DIR, NUM_CLASSES["rice"])
-    kfold_local_dataset("cassava", CASSAVA_DATA_DIR, NUM_CLASSES["cassava"])
+    # FIX: Capture return values so k-fold results are available in scope
+    # (previously discarded, making aggregate results inaccessible after the call)
+    pv_fold_summaries = kfold_plantvillage(NUM_CLASSES["plantvillage"])
+    rice_fold_summaries = kfold_local_dataset("rice", RICE_DATA_DIR, NUM_CLASSES["rice"])
+    cassava_fold_summaries = kfold_local_dataset("cassava", CASSAVA_DATA_DIR, NUM_CLASSES["cassava"])
 
     # Final summary across all datasets
     print("\n" + "=" * 60)
@@ -410,7 +455,7 @@ if __name__ == "__main__":
     with open(os.path.join(OUTPUT_DIR, "final_summary.json"), "w") as f:
         json.dump(all_summaries, f, indent=2)
 
-    print("\n✅ Training complete. Results saved to ./results/")
+    print("\n✅ Training complete. Results saved to ./outputs/")
 
 
 # =============================================================================

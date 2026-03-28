@@ -3,12 +3,7 @@ Replication - Data Loading and Preprocessing
 """
 
 import os
-import json
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.model_selection import KFold, train_test_split
-from sklearn.metrics import confusion_matrix, classification_report
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -16,8 +11,6 @@ import tensorflow_datasets as tfds
 layers = tf.keras.layers
 models = tf.keras.models
 Model = tf.keras.Model
-Adam = tf.keras.optimizers.Adam
-to_categorical = tf.keras.utils.to_categorical
 
 # Use HDD for TFDS
 TFDS_DATA_DIR = "/mnt/HDD T4T/tensorflow_datasets"
@@ -149,12 +142,16 @@ def _load_plantvillage_from_tfrecords():
 
 # Loads raw plantvillage dataset and performs shuffled train/validate split
 def load_plantvillage():
+    # Load raw dataset
     ds, total = load_plantvillage_full()
 
+    # Get train/validate size
     train_size = int(total * TRAIN_SPLIT)
 
+    # Shuffle dataset
     ds = ds.shuffle(buffer_size=total, seed=SEED)
 
+    # Split dataset into train and validate sets
     train_ds = (
         ds.take(train_size)
         .batch(BATCH_SIZE)
@@ -171,6 +168,7 @@ def load_plantvillage():
     return train_ds, val_ds
 
 # Loads the raw plantvillage dataset without batching or shuffling for downstream k-fold cross validation
+# Attempts to load cached, if no cached, fallback to download through TFDS
 def load_plantvillage_full():
     print("Loading PlantVillage dataset (full)...")
 
@@ -193,17 +191,21 @@ def load_plantvillage_full():
 
         label_names = info.features["label"].names
 
+        # Get indicies of subset classes
         keep_indices = [
             i for i, name in enumerate(label_names)
             if name in PLANTVILLAGE_KEEP_LABELS
         ]
         keep_indices_tensor = tf.constant(keep_indices, dtype=tf.int64)
 
+        # Remap indicies to subset of 17 classes
         old_to_new = {old: new for new, old in enumerate(keep_indices)}
 
+        # Filter out any classes outside the subset
         def filter_fn(image, label):
             return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
+        # Remap old indexes to new range
         def remap_label(image, label):
             new_label = tf.py_function(
                 lambda l: old_to_new[int(l)], [label], tf.int64
@@ -211,11 +213,13 @@ def load_plantvillage_full():
             new_label.set_shape(())
             return image, new_label
 
+        # Apply image resizing and normalization to 0-1 
         def preprocess(image, label):
             image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE])
             image = tf.cast(image, tf.float32) / 255.0
             return image, label
 
+        # Filter out classes outside subset, update indicies and preprocess samples
         ds = (
             ds
             .filter(filter_fn)
@@ -223,7 +227,7 @@ def load_plantvillage_full():
             .map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
         )
 
-        # IMPORTANT: count AFTER filtering
+        # Get count of total samples
         total = sum(1 for _ in ds)
 
     print(f"  PlantVillage FULL dataset size: {total}")
@@ -271,6 +275,10 @@ def load_rice():
     total = sum(1 for _ in full_ds)
     # Get actual train set size based on sample count
     train_size = int(total * TRAIN_SPLIT)
+
+    # Shuffle dataset
+    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED)
+
     # Train/validation split of dataset
     train_ds = full_ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
@@ -319,6 +327,9 @@ def load_cassava():
     total = sum(1 for _ in full_ds)
     # Get actual train set size based on sample count
     train_size = int(total * TRAIN_SPLIT)
+
+    # Shuffle dataset
+    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED)
 
     train_ds = full_ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)

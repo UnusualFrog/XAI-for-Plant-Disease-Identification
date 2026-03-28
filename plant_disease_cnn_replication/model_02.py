@@ -7,7 +7,6 @@ import numpy as np
 import tensorflow as tf
 
 layers = tf.keras.layers
-models = tf.keras.models
 Model = tf.keras.Model
 
 # GPU Setup
@@ -231,7 +230,7 @@ def build_model(num_classes, input_shape=(256, 256, 3), dropout_rate=0.5):
                           filters_3x3_reduce=64, filters_3x3=128,
                           filters_7x7_reduce=64, filters_7x7=128, filters_pool=64)
 
-    print(f"  Pre-GAP feature map channels: {x.shape[-1]}")
+    # print(f"  Pre-GAP feature map channels: {x.shape[-1]}")
     # 8. Global Average Pooling
     x = layers.GlobalAveragePooling2D()(x)
 
