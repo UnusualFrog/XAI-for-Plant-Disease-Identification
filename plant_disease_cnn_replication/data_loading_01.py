@@ -317,11 +317,9 @@ def load_cassava():
     return train_ds, val_ds
 
 
-# =============================================================================
-# QUICK SANITY CHECK
-# =============================================================================
 
-def sanity_check(dataset, name, num_classes):
+# Validate dataset integrity
+def validate_dataset(dataset, name, num_classes):
     """Checks a single batch for expected shapes and label range."""
     for images, labels in dataset.take(1):
         print(f"\n[{name}] Batch check:")
@@ -334,34 +332,29 @@ def sanity_check(dataset, name, num_classes):
         print(f"  ✅ {name} sanity check passed.")
 
 
-# =============================================================================
-# ENTRY POINT
-# =============================================================================
-
+# Main Block
 if __name__ == "__main__":
     print("=" * 60)
     print("TensorFlow version:", tf.__version__)
     print("GPU available:", tf.config.list_physical_devices("GPU"))
     print("=" * 60)
 
-    # --- PlantVillage ---
+    # Load PlantVillage
     pv_train, pv_val = load_plantvillage()
-    sanity_check(pv_train, "PlantVillage", NUM_CLASSES["plantvillage"])
+    validate_dataset(pv_train, "PlantVillage", NUM_CLASSES["plantvillage"])
 
-    # --- Rice ---
+    # Load Rice disease
     rice_train, rice_val = load_rice()
-    sanity_check(rice_train, "Rice", NUM_CLASSES["rice"])
+    validate_dataset(rice_train, "Rice", NUM_CLASSES["rice"])
 
-    # --- Cassava ---
+    # Load Cassava
     cassava_train, cassava_val = load_cassava()
-    sanity_check(cassava_train, "Cassava", NUM_CLASSES["cassava"])
+    validate_dataset(cassava_train, "Cassava", NUM_CLASSES["cassava"])
 
     print("\n✅ Data loading step complete. Proceed to 02_model.py")
 
 
-# =============================================================================
-# ⚠️ OUTSTANDING GAPS
-# =============================================================================
+# Gaps
 #
 # 1. BATCH SIZE — Not stated in the paper. Using 32 as default.
 #

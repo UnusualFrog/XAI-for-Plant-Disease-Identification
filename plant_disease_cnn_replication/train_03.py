@@ -28,12 +28,12 @@ for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 
 # Import project modules
-from data_loading_01 import (          # data_loading_01.py
+from data_loading_01 import (
     load_plantvillage, load_rice, load_cassava,
     NUM_CLASSES, EPOCHS, BATCH_SIZE, SEED, N_FOLDS,
     RICE_DATA_DIR, CASSAVA_DATA_DIR,
 )
-from model_02 import build_model       # model_02.py
+from model_02 import build_model
 
 # Set global random seed
 tf.random.set_seed(SEED)
@@ -41,16 +41,17 @@ np.random.seed(SEED)
 
 
 # Model Training Hyperparameters
-# NOTE: Paper states Adam but gives no learning rate, schedule, or decay, 1e-3 used as default
+# NOTE: Paper states Adam optimizer but gives no learning rate, schedule, or decay, 1e-3 used as default
 LEARNING_RATE = 1e-3
 # NOTE: dropout rate not stated, 0.5 used as default
 DROPOUT_RATE = 0.5
+# Directory to output results of training
 OUTPUT_DIR = "./results"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Helper functions
 
-def make_callbacks(dataset_name: str, fold: int = None) -> list:
+def make_callbacks(dataset_name, fold = None):
     """
     Returns a standard callback set for one training run.
 
@@ -73,7 +74,7 @@ def make_callbacks(dataset_name: str, fold: int = None) -> list:
     ]
 
 
-def compile_model(model: tf.keras.Model) -> tf.keras.Model:
+def compile_model(model):
     """
     Compiles model with Adam and sparse categorical crossentropy.
     Labels from the data pipeline are integer-encoded (not one-hot),
@@ -86,9 +87,8 @@ def compile_model(model: tf.keras.Model) -> tf.keras.Model:
     )
     return model
 
-
-def plot_history(history, dataset_name: str, fold: int = None):
-    """Saves accuracy and loss curves matching Figures 7–9 in the paper."""
+# Plot acuracy and loss curves
+def plot_history(history, dataset_name, fold = None):
     tag = dataset_name if fold is None else f"{dataset_name}_fold{fold}"
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
@@ -110,15 +110,8 @@ def plot_history(history, dataset_name: str, fold: int = None):
     plt.savefig(os.path.join(OUTPUT_DIR, f"curves_{tag}.png"), dpi=150)
     plt.close()
 
-
-def evaluate_and_report(model, val_ds, dataset_name: str,
-                         num_classes: int, fold: int = None):
-    """
-    Runs inference on the validation set and saves:
-      - Classification report (precision, recall, F1 per class)
-      - Confusion matrix heatmap
-      - Summary JSON with scalar metrics
-    """
+# Evalute model on validation dataset to produce classification report, confusion matrix and json summary
+def evaluate_and_report(model, val_ds, dataset_name, num_classes, fold = None):
     tag = dataset_name if fold is None else f"{dataset_name}_fold{fold}"
 
     # Collect ground-truth labels and predictions
@@ -131,7 +124,7 @@ def evaluate_and_report(model, val_ds, dataset_name: str,
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
 
-    # Classification report (Table 8 equivalent)
+    # Classification report
     report = classification_report(y_true, y_pred, output_dict=True)
     report_text = classification_report(y_true, y_pred)
     print(f"\n[{tag}] Classification Report:\n{report_text}")
@@ -171,12 +164,8 @@ def evaluate_and_report(model, val_ds, dataset_name: str,
     return summary
 
 
-# =============================================================================
-# MAIN TRAINING RUN (Table 7 equivalent — single 80/20 split)
-# =============================================================================
-
-def train_dataset(dataset_name: str, train_ds, val_ds, num_classes: int):
-    """Full 50-epoch training run on a single dataset."""
+# Train model on training dataset
+def train_dataset(dataset_name, train_ds, val_ds, num_classes):
     print(f"\n{'='*60}")
     print(f"Training on {dataset_name} ({num_classes} classes)")
     print(f"{'='*60}")

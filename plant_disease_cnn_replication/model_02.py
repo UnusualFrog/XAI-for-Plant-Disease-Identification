@@ -245,7 +245,7 @@ def build_model(num_classes, input_shape=(256, 256, 3), dropout_rate=0.5):
     model = Model(inputs, outputs)
     return model
 
-
+# Main Block
 # Ensure total parameter counts are within 5% range of paper's count
 if __name__ == "__main__":
     print("=" * 60)
