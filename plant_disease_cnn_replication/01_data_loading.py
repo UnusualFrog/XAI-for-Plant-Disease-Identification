@@ -1,5 +1,5 @@
 """
-Replication - Data Loading
+Replication - Data Loading and Preprocessing
 """
 
 import os
@@ -28,7 +28,6 @@ SEED = 42
 tf.random.set_seed(SEED)
 np.random.seed(SEED)
 
-
 # Global Hyperparameters
 IMG_SIZE = 256
 BATCH_SIZE = 32       # GAP: Not stated in paper, 32 is a standard default
@@ -43,7 +42,6 @@ NUM_CLASSES = {
     "rice": 4,
     "cassava": 5,
 }
-
 
 # =============================================================================
 # PLANTVILLAGE DATASET
