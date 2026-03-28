@@ -195,7 +195,7 @@ def build_model(num_classes, input_shape=(256, 256, 3), dropout_rate=0.5):
     #2. One standard convolution with batch normalization and ReLU
     x = conv_bn_relu(inputs, 32, 3)
 
-    #3. Three depthwise separable convolutions,two with Average Pooling
+    #3. Three depthwise separable convolutions,two with Max Pooling
     x = depthwise_separable_bn_relu(x, 64, 3)
     x = layers.MaxPooling2D(3, strides=2, padding="same")(x)
 

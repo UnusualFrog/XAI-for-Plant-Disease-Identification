@@ -30,7 +30,8 @@ np.random.seed(SEED)
 
 # Global Hyperparameters
 IMG_SIZE = 256
-BATCH_SIZE = 32       # GAP: Not stated in paper, 32 is a standard default
+# Note: batch size absent from paper, default of 32 used
+BATCH_SIZE = 32
 EPOCHS = 50
 TRAIN_SPLIT = 0.8
 VAL_SPLIT = 0.2
@@ -48,13 +49,11 @@ NUM_CLASSES = {
 # Source: tensorflow_datasets — 'plant_village'
 # Only corn, potato, and tomato subsets are used (17 classes)
 #
-# NOTE ON LOADING STRATEGY:
+# NOTE:
 # tensorflow-datasets 4.9.9 is incompatible with protobuf 7.x (required by
 # TF 2.21). The TFDS builder crashes when reading dataset_info.json from the
-# local cache. To work around this, we detect whether the tfrecords are already
-# downloaded and parse them directly via tf.data, bypassing the TFDS builder
-# entirely. On a fresh environment with no cache, we fall back to tfds.load
-# which will download and write the cache once.
+# local cache. To address this, on each run, check for local cache and use if
+# present, otherwise download dataset
 # =============================================================================
 
 # Labels in TFDS that correspond to the paper's 17 corn/potato/tomato classes
@@ -81,28 +80,17 @@ PLANTVILLAGE_KEEP_LABELS = [
 # Path to the downloaded PlantVillage tfrecords
 PLANTVILLAGE_CACHE_DIR = os.path.join(TFDS_DATA_DIR, "plant_village", "1.0.2")
 
-
+# Check for existnce of cached dataset to prevent crash (See above note)
 def _plantvillage_cache_exists():
-    """Returns True if the tfrecord shards are already on disk."""
     if not os.path.exists(PLANTVILLAGE_CACHE_DIR):
         return False
     files = [f for f in os.listdir(PLANTVILLAGE_CACHE_DIR)
              if f.endswith(".tfrecord-00000-of-00008")]
     return len(files) > 0
 
-
+# Load plantvillage dataset cache (See above note)
 def _load_plantvillage_from_tfrecords():
-    """
-    Reads PlantVillage directly from tfrecord shards, bypassing the TFDS
-    builder and its protobuf-incompatible metadata reader.
-
-    The tfrecord feature schema for plant_village is:
-        image/encoded: raw JPEG bytes
-        image/filename: string
-        label: int64
-    Label names are read from label.labels.txt in the cache directory.
-    """
-    # Read label names from the cache — this is a plain text file, no protobuf
+    # Read label names from the cache
     labels_path = os.path.join(PLANTVILLAGE_CACHE_DIR, "label.labels.txt")
     with open(labels_path, "r") as f:
         label_names = [line.strip() for line in f.readlines()]
@@ -114,7 +102,7 @@ def _load_plantvillage_from_tfrecords():
     ]
     keep_indices_tensor = tf.constant(keep_indices, dtype=tf.int64)
 
-    # Remap original label indices to 0-indexed range for our 17-class subset
+    # Remap original label indices to 0-indexed range for 17-class subset
     old_to_new = {old: new for new, old in enumerate(keep_indices)}
 
     # tfrecord feature description matching plant_village schema
@@ -123,6 +111,7 @@ def _load_plantvillage_from_tfrecords():
         "label": tf.io.FixedLenFeature([], tf.int64),
     }
 
+    # Parse local record data into image and label
     def parse_example(serialized):
         features = tf.io.parse_single_example(serialized, feature_description)
         image = tf.image.decode_jpeg(features["image"], channels=3)
@@ -131,9 +120,11 @@ def _load_plantvillage_from_tfrecords():
         label = features["label"]
         return image, label
 
+    # Filter images to include only labels from the subset
     def filter_fn(image, label):
         return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
+    # Fix label index on filtered samples
     def remap_label(image, label):
         new_label = tf.py_function(
             lambda l: old_to_new[int(l)], [label], tf.int64
@@ -141,25 +132,28 @@ def _load_plantvillage_from_tfrecords():
         new_label.set_shape(())
         return image, new_label
 
-    # Load all 8 tfrecord shards
+    # Load all 8 tfrecord shards from cache
     tfrecord_files = sorted(tf.io.gfile.glob(
         os.path.join(PLANTVILLAGE_CACHE_DIR, "plant_village-train.tfrecord*")
     ))
 
     ds = tf.data.TFRecordDataset(tfrecord_files)
+    # Load records
     ds = ds.map(parse_example, num_parallel_calls=tf.data.AUTOTUNE)
+    # Filter records outside subset
     ds = ds.filter(filter_fn)
+    # Update indicies to 17-classes
     ds = ds.map(remap_label, num_parallel_calls=tf.data.AUTOTUNE)
 
     return ds, label_names
 
-
+# Load the plantvillage dataset, from cache if available, otherwise download
 def load_plantvillage():
     print("Loading PlantVillage dataset...")
 
     if _plantvillage_cache_exists():
-        # Fast path: read directly from tfrecords, skip broken TFDS builder
-        print("  Cache found — reading tfrecords directly (bypassing TFDS builder)...")
+        # Cache exists, read directly from cached tfrecords, skip broken TFDS builder (see note above)
+        print("  Cache found — reading tfrecords directly")
         ds, label_names = _load_plantvillage_from_tfrecords()
 
         # Count filtered samples for splitting
@@ -167,7 +161,7 @@ def load_plantvillage():
         total = sum(1 for _ in ds)
 
     else:
-        # First-run path: no cache yet, use tfds.load to download
+        #  No cache yet, use tfds.load to download
         print("  No cache found — downloading via TFDS (first run only)...")
         ds, info = tfds.load(
             "plant_village",
@@ -177,16 +171,21 @@ def load_plantvillage():
             shuffle_files=True,
         )
         label_names = info.features["label"].names
+
+        # Get indicies of classes in subset
         keep_indices = [
             i for i, name in enumerate(label_names)
             if name in PLANTVILLAGE_KEEP_LABELS
         ]
         keep_indices_tensor = tf.constant(keep_indices, dtype=tf.int64)
+        # Map old indicies to new (17-class-count) index range 
         old_to_new = {old: new for new, old in enumerate(keep_indices)}
 
+        # filter out samples outside the subset
         def filter_fn(image, label):
             return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
+        # Update indicies for filtered samples
         def remap_label(image, label):
             new_label = tf.py_function(
                 lambda l: old_to_new[int(l)], [label], tf.int64
@@ -194,19 +193,25 @@ def load_plantvillage():
             new_label.set_shape(())
             return image, new_label
 
+        # Preprocess image samples to resize and normalize
         def preprocess(image, label):
             image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE])
             image = tf.cast(image, tf.float32) / 255.0
             return image, label
 
+        # Filter, update indicies, preprocess dataset
         ds = ds.filter(filter_fn).map(remap_label).map(
             preprocess, num_parallel_calls=tf.data.AUTOTUNE
         )
+        # Get total sample count
         total = info.splits["train"].num_examples
 
+    # Get actual train size from sample count
     train_size = int(total * TRAIN_SPLIT)
 
+    # Shuffle dataset
     ds = ds.shuffle(buffer_size=total, seed=SEED)
+    # Split dataset into train and validation set
     train_ds = ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     val_ds = ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
@@ -227,6 +232,7 @@ def load_plantvillage():
 
 RICE_DATA_DIR = "./data/rice_data"
 
+# Load rice dataset locally
 def load_rice():
     if not os.path.exists(RICE_DATA_DIR):
         raise FileNotFoundError(
@@ -243,14 +249,18 @@ def load_rice():
         label_mode="int",
     )
 
+    # normalize image
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
 
+    # preprocess dataset
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
 
+    # Get total number of samples
     total = sum(1 for _ in full_ds)
+    # Get actual train set size based on sample count
     train_size = int(total * TRAIN_SPLIT)
-
+    # Train/validation split of dataset
     train_ds = full_ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
@@ -271,7 +281,7 @@ def load_rice():
 # =============================================================================
 
 CASSAVA_DATA_DIR = "./data/cassava_data"
-
+# Load cassava dataset locally
 def load_cassava():
     if not os.path.exists(CASSAVA_DATA_DIR):
         raise FileNotFoundError(
@@ -288,17 +298,21 @@ def load_cassava():
         label_mode="int",
     )
 
+    # normalize image   
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
-
+    # preprocess dataset
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
 
+    # Get total number of samples
     total = sum(1 for _ in full_ds)
+    # Get actual train set size based on sample count
     train_size = int(total * TRAIN_SPLIT)
 
     train_ds = full_ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-
+    
+    # Train/validation split of dataset
     print(f"  Cassava — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 

@@ -1,7 +1,6 @@
 """
 Replication - Model Training
-Hassan & Maji (2022): "Plant Disease Identification Using a Novel Convolutional Neural Network"
-IEEE Access, DOI: 10.1109/ACCESS.2022.3141371
+
 
 Training protocol:
   - Optimizer: Adam (paper states Adam, no LR given — see GAPS)
@@ -10,7 +9,6 @@ Training protocol:
   - K-fold: 5-fold cross-validation for robustness evaluation
   - Metrics: accuracy, precision, recall, F1-score, confusion matrix
 
-Run order: 01_data.py → 02_model.py → this script
 """
 
 import os
@@ -30,36 +28,27 @@ for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 
 # Import project modules
-from data_loading import (          # 01_data.py
+from data_loading_01 import (          # data_loading_01.py
     load_plantvillage, load_rice, load_cassava,
     NUM_CLASSES, EPOCHS, BATCH_SIZE, SEED, N_FOLDS,
     RICE_DATA_DIR, CASSAVA_DATA_DIR,
 )
-from model import build_model       # 02_model.py
+from model_02 import build_model       # model_02.py
 
-# =============================================================================
-# REPRODUCIBILITY
-# =============================================================================
-
+# Set global random seed
 tf.random.set_seed(SEED)
 np.random.seed(SEED)
 
-# =============================================================================
-# HYPERPARAMETERS
-# =============================================================================
 
-# GAP: Paper states Adam but gives no learning rate, schedule, or decay.
-# 1e-3 is Adam's default and the most common starting point in the literature.
+# Model Training Hyperparameters
+# NOTE: Paper states Adam but gives no learning rate, schedule, or decay, 1e-3 used as default
 LEARNING_RATE = 1e-3
-
-DROPOUT_RATE = 0.5      # GAP: not stated in paper — standard default
-
+# NOTE: dropout rate not stated, 0.5 used as default
+DROPOUT_RATE = 0.5
 OUTPUT_DIR = "./results"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# =============================================================================
-# HELPERS
-# =============================================================================
+# Helper functions
 
 def make_callbacks(dataset_name: str, fold: int = None) -> list:
     """
