@@ -15,7 +15,8 @@ import os
 import json
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")   # headless — no display required
+# No output version
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report
@@ -29,7 +30,7 @@ for gpu in gpus:
 
 # Import project modules
 from data_loading_01 import (
-    load_plantvillage, load_rice, load_cassava,
+    load_plantvillage_full, load_plantvillage, load_rice, load_cassava,
     NUM_CLASSES, EPOCHS, BATCH_SIZE, SEED, N_FOLDS,
     RICE_DATA_DIR, CASSAVA_DATA_DIR,
 )
@@ -38,7 +39,6 @@ from model_02 import build_model
 # Set global random seed
 tf.random.set_seed(SEED)
 np.random.seed(SEED)
-
 
 # Model Training Hyperparameters
 # NOTE: Paper states Adam optimizer but gives no learning rate, schedule, or decay, 1e-3 used as default
@@ -52,34 +52,27 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Helper functions
 
 def make_callbacks(dataset_name, fold = None):
-    """
-    Returns a standard callback set for one training run.
-
-    ModelCheckpoint saves the best validation accuracy weights.
-    EarlyStopping is NOT used — the paper trains for exactly 50 epochs.
-    """
+    # Set filename to dataset with current fold if available
     tag = dataset_name if fold is None else f"{dataset_name}_fold{fold}"
+    # Set output file path for current dataset
     ckpt_path = os.path.join(OUTPUT_DIR, f"best_{tag}.keras")
 
     return [
+        # Save model with best validation accuracy
         tf.keras.callbacks.ModelCheckpoint(
             filepath=ckpt_path,
             monitor="val_accuracy",
             save_best_only=True,
             verbose=0,
         ),
+        # Save training metrics to CSV
         tf.keras.callbacks.CSVLogger(
             os.path.join(OUTPUT_DIR, f"log_{tag}.csv")
         ),
     ]
 
-
+# Complile model with Adam optimizer and sparse categorical crossentropy loss to optimize accuracy
 def compile_model(model):
-    """
-    Compiles model with Adam and sparse categorical crossentropy.
-    Labels from the data pipeline are integer-encoded (not one-hot),
-    so sparse_categorical_crossentropy is appropriate.
-    """
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
         loss="sparse_categorical_crossentropy",
@@ -89,9 +82,12 @@ def compile_model(model):
 
 # Plot acuracy and loss curves
 def plot_history(history, dataset_name, fold = None):
+    # Set filename to dataset name with current fold if available
     tag = dataset_name if fold is None else f"{dataset_name}_fold{fold}"
+    # 1 row of 2 subplots
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
+    # Plot training vs. validation accuracy over epochs to first subplot
     axes[0].plot(history.history["accuracy"], label="Train")
     axes[0].plot(history.history["val_accuracy"], label="Validation")
     axes[0].set_title(f"{dataset_name} — Accuracy")
@@ -99,6 +95,7 @@ def plot_history(history, dataset_name, fold = None):
     axes[0].set_ylabel("Accuracy")
     axes[0].legend()
 
+    # Plot training vs. validation loss over epochs to second subplot
     axes[1].plot(history.history["loss"], label="Train")
     axes[1].plot(history.history["val_loss"], label="Validation")
     axes[1].set_title(f"{dataset_name} — Loss")
@@ -107,32 +104,35 @@ def plot_history(history, dataset_name, fold = None):
     axes[1].legend()
 
     plt.tight_layout()
+    # Save plots to file
     plt.savefig(os.path.join(OUTPUT_DIR, f"curves_{tag}.png"), dpi=150)
     plt.close()
 
 # Evalute model on validation dataset to produce classification report, confusion matrix and json summary
 def evaluate_and_report(model, val_ds, dataset_name, num_classes, fold = None):
+    # Set filename to datasetnet with current fold if available
     tag = dataset_name if fold is None else f"{dataset_name}_fold{fold}"
 
     # Collect ground-truth labels and predictions
-    y_true, y_pred = [], []
-    for images, labels in val_ds:
-        preds = model.predict(images, verbose=0)
-        y_pred.extend(np.argmax(preds, axis=1))
-        y_true.extend(labels.numpy())
+    preds = model.predict(val_ds, verbose=0)
+    y_pred = np.argmax(preds, axis=1)
+
+    y_true = np.concatenate([y.numpy() for _, y in val_ds])
 
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
 
-    # Classification report
+    # Classification report for precision, recall, F1 and accuracy
     report = classification_report(y_true, y_pred, output_dict=True)
     report_text = classification_report(y_true, y_pred)
+    # Display classification report
     print(f"\n[{tag}] Classification Report:\n{report_text}")
 
+    # Save classification report to file
     with open(os.path.join(OUTPUT_DIR, f"report_{tag}.txt"), "w") as f:
         f.write(report_text)
 
-    # Confusion matrix
+    # Save confusion matrix heatmap to file
     cm = confusion_matrix(y_true, y_pred)
     fig, ax = plt.subplots(figsize=(max(6, num_classes), max(5, num_classes - 1)))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
@@ -143,7 +143,7 @@ def evaluate_and_report(model, val_ds, dataset_name, num_classes, fold = None):
     plt.savefig(os.path.join(OUTPUT_DIR, f"cm_{tag}.png"), dpi=150)
     plt.close()
 
-    # Scalar summary
+    # Save scalar summary to json
     accuracy = np.sum(y_true == y_pred) / len(y_true)
     summary = {
         "dataset": dataset_name,
@@ -163,16 +163,17 @@ def evaluate_and_report(model, val_ds, dataset_name, num_classes, fold = None):
 
     return summary
 
-
 # Train model on training dataset
 def train_dataset(dataset_name, train_ds, val_ds, num_classes):
     print(f"\n{'='*60}")
     print(f"Training on {dataset_name} ({num_classes} classes)")
     print(f"{'='*60}")
-
+    
+    # Create blank model
     model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
     model = compile_model(model)
 
+    # Train model on training data
     history = model.fit(
         train_ds,
         validation_data=val_ds,
@@ -181,6 +182,7 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes):
         verbose=1,
     )
 
+    # Plot loss and accuracy
     plot_history(history, dataset_name)
 
     # Load best checkpoint for evaluation
@@ -188,29 +190,12 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes):
     if os.path.exists(best_path):
         model.load_weights(best_path)
 
+    # Evaluate model and compare training metrics to validation metrics
     summary = evaluate_and_report(model, val_ds, dataset_name, num_classes)
     return summary
 
-
-# =============================================================================
-# K-FOLD CROSS-VALIDATION (Table 9 equivalent)
-#
-# GAP: The paper uses 5-fold CV but loads the full dataset each fold.
-# The data loaders in 01_data.py return pre-split tf.data pipelines,
-# so for k-fold we need access to the raw (unbatched, unshuffled) dataset.
-# The fold loop below reconstructs splits from the raw directory loaders.
-#
-# PlantVillage k-fold is omitted here because the tfrecord loading path
-# in 01_data.py does not expose a resplittable dataset object easily.
-# It is included for Rice and Cassava where image_dataset_from_directory
-# is used and resplitting is straightforward.
-# =============================================================================
-
-def kfold_dataset(dataset_name: str, data_dir: str, num_classes: int):
-    """
-    Runs 5-fold cross-validation on a directory-based dataset.
-    Reproduces Table 9 in the paper.
-    """
+# Crossvalidate the cassavana or rice dataset with 5 fold K-fold crossvalidation
+def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
     print(f"\n{'='*60}")
     print(f"5-Fold CV — {dataset_name}")
     print(f"{'='*60}")
@@ -220,41 +205,50 @@ def kfold_dataset(dataset_name: str, data_dir: str, num_classes: int):
         data_dir,
         image_size=(256, 256),
         batch_size=None,
-        shuffle=True,
+        shuffle=False,
         seed=SEED,
         label_mode="int",
     )
 
+    # Normalize feature values to range of 0-1
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
 
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
 
+    # Get count of samples for k-fold splititng, cache value to improve performance
+    full_ds = full_ds.cache()
     total = sum(1 for _ in full_ds)
     fold_size = total // N_FOLDS
 
     fold_summaries = []
 
+    # Loop through each fold
     for fold in range(N_FOLDS):
         print(f"\n--- Fold {fold + 1}/{N_FOLDS} ---")
 
+        # Get start and end range of validation set
         val_start = fold * fold_size
         val_end = val_start + fold_size
 
-        # Validation: the fold's slice; Training: everything else
+        # Split data into training and validation folds
         val_ds = full_ds.skip(val_start).take(fold_size)
         train_ds = full_ds.take(val_start).concatenate(
             full_ds.skip(val_end)
         )
 
+        # shuffle and batch training data
         train_ds = train_ds.shuffle(
             buffer_size=total - fold_size, seed=SEED
         ).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+        # shuffle validation data
         val_ds = val_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
+        # build and complie model
         model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
         model = compile_model(model)
 
+        # train model on training data
         history = model.fit(
             train_ds,
             validation_data=val_ds,
@@ -263,24 +257,29 @@ def kfold_dataset(dataset_name: str, data_dir: str, num_classes: int):
             verbose=1,
         )
 
+        # plot training validation and accuracy
         plot_history(history, dataset_name, fold=fold + 1)
 
+        # Load model from best performing fold
         best_path = os.path.join(OUTPUT_DIR, f"best_{dataset_name}_fold{fold+1}.keras")
+        # Check if best performing model exists
         if os.path.exists(best_path):
             model.load_weights(best_path)
 
+        # Evalute model using best performing fold
         summary = evaluate_and_report(
             model, val_ds, dataset_name, num_classes, fold=fold + 1
         )
         fold_summaries.append(summary)
 
-    # Aggregate across folds (Table 9 equivalent)
+    # Aggregate across folds
     accuracies = [s["accuracy"] for s in fold_summaries]
     print(f"\n[{dataset_name}] K-Fold Results:")
     print(f"  Per-fold accuracies: {[f'{a:.4f}' for a in accuracies]}")
     print(f"  Mean: {np.mean(accuracies):.4f} | Std: {np.std(accuracies):.4f}")
     print(f"  Range: {np.min(accuracies):.4f} – {np.max(accuracies):.4f}")
 
+    # Sve results to JSON
     with open(os.path.join(OUTPUT_DIR, f"kfold_{dataset_name}.json"), "w") as f:
         json.dump({
             "dataset": dataset_name,
@@ -293,11 +292,76 @@ def kfold_dataset(dataset_name: str, data_dir: str, num_classes: int):
 
     return fold_summaries
 
+# Perform 5 fold k-fold cross validation on plantvillage
+def kfold_plantvillage(num_classes):
+    print(f"\n{'='*60}")
+    print("5-Fold CV — PlantVillage")
+    print(f"{'='*60}")
 
-# =============================================================================
-# ENTRY POINT
-# =============================================================================
+    # Load full dataset
+    full_ds, total = load_plantvillage_full()
 
+    # Get fold split size
+    fold_size = total // N_FOLDS
+    fold_summaries = []
+
+    # Loop through folds
+    for fold in range(N_FOLDS):
+        print(f"\n--- Fold {fold + 1}/{N_FOLDS} ---")
+
+        # Get start and end range of validation set
+        val_start = fold * fold_size
+        val_end = val_start + fold_size
+
+        # Split into training and validation folds
+        val_ds = full_ds.skip(val_start).take(fold_size)
+        train_ds = full_ds.take(val_start).concatenate(
+            full_ds.skip(val_end)
+        )
+
+        # Shuffle and batch training fold
+        train_ds = train_ds.shuffle(
+            buffer_size=total - fold_size, seed=SEED
+        ).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+
+        # batch validation fold
+        val_ds = val_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+
+        # Create blank model
+        model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
+        model = compile_model(model)
+
+        # Train model on training fold data
+        history = model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=EPOCHS,
+            callbacks=make_callbacks("plantvillage", fold=fold + 1),
+            verbose=1,
+        )
+
+        # Plot accuracy and loss for current fold
+        plot_history(history, "plantvillage", fold=fold + 1)
+
+        # Load model from best performing fold
+        best_path = os.path.join(
+            OUTPUT_DIR, f"best_plantvillage_fold{fold+1}.keras"
+        )
+        if os.path.exists(best_path):
+            model.load_weights(best_path)
+
+        # Evalute best performing model
+        summary = evaluate_and_report(
+            model, val_ds, "plantvillage",
+            num_classes, fold=fold + 1
+        )
+
+        fold_summaries.append(summary)
+
+    return fold_summaries
+
+
+# Main block
 if __name__ == "__main__":
     print("=" * 60)
     print("TensorFlow:", tf.__version__)
@@ -306,7 +370,7 @@ if __name__ == "__main__":
 
     all_summaries = {}
 
-    # --- Main training runs (Table 7) ---
+    #Main training runs
     pv_train, pv_val = load_plantvillage()
     all_summaries["plantvillage"] = train_dataset(
         "plantvillage", pv_train, pv_val, NUM_CLASSES["plantvillage"]
@@ -322,11 +386,12 @@ if __name__ == "__main__":
         "cassava", cassava_train, cassava_val, NUM_CLASSES["cassava"]
     )
 
-    # --- K-Fold cross-validation (Table 9) ---
-    kfold_dataset("rice", RICE_DATA_DIR, NUM_CLASSES["rice"])
-    kfold_dataset("cassava", CASSAVA_DATA_DIR, NUM_CLASSES["cassava"])
+    #K-Fold cross-validation
+    kfold_plantvillage(NUM_CLASSES["plantvillage"])
+    kfold_local_dataset("rice", RICE_DATA_DIR, NUM_CLASSES["rice"])
+    kfold_local_dataset("cassava", CASSAVA_DATA_DIR, NUM_CLASSES["cassava"])
 
-    # --- Final summary across all datasets ---
+    # Final summary across all datasets
     print("\n" + "=" * 60)
     print("FINAL RESULTS SUMMARY")
     print("=" * 60)
@@ -341,6 +406,7 @@ if __name__ == "__main__":
         print(f"  {name:12s}  Achieved: {summary['accuracy']:.4f}  "
               f"Target: {target:.4f}  Delta: {delta:+.4f}")
 
+    # Save all summaries to json
     with open(os.path.join(OUTPUT_DIR, "final_summary.json"), "w") as f:
         json.dump(all_summaries, f, indent=2)
 
@@ -363,13 +429,7 @@ if __name__ == "__main__":
 #    If replicated accuracy is below target (especially on Cassava), note
 #    that augmentation may have been used implicitly.
 #
-# 5. PLANTVILLAGE K-FOLD — Omitted because the tfrecord-based loader in
-#    01_data.py does not expose a cleanly resplittable dataset. The paper
-#    reports k-fold results for all three datasets (Table 9). To add this,
-#    refactor load_plantvillage() to return an unbatched ds and total count,
-#    then apply the same fold-slicing logic used for Rice and Cassava.
-#
-# 6. CLASS WEIGHTS — The Cassava dataset is imbalanced (the paper notes
+# 5. CLASS WEIGHTS — The Cassava dataset is imbalanced (the paper notes
 #    this explicitly). No class weighting is applied here, matching the
 #    paper's apparent approach. If accuracy is poor, add class_weight to
 #    model.fit() as a post-hoc experiment.

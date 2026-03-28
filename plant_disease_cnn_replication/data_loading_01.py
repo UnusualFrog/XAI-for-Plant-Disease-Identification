@@ -147,22 +147,42 @@ def _load_plantvillage_from_tfrecords():
 
     return ds, label_names
 
-# Load the plantvillage dataset, from cache if available, otherwise download
+# Loads raw plantvillage dataset and performs shuffled train/validate split
 def load_plantvillage():
-    print("Loading PlantVillage dataset...")
+    ds, total = load_plantvillage_full()
+
+    train_size = int(total * TRAIN_SPLIT)
+
+    ds = ds.shuffle(buffer_size=total, seed=SEED)
+
+    train_ds = (
+        ds.take(train_size)
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+    val_ds = (
+        ds.skip(train_size)
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+    print(f"  PlantVillage — Total: {total} | Train: {train_size} | Val: {total - train_size}")
+    return train_ds, val_ds
+
+# Loads the raw plantvillage dataset without batching or shuffling for downstream k-fold cross validation
+def load_plantvillage_full():
+    print("Loading PlantVillage dataset (full)...")
 
     if _plantvillage_cache_exists():
-        # Cache exists, read directly from cached tfrecords, skip broken TFDS builder (see note above)
         print("  Cache found — reading tfrecords directly")
         ds, label_names = _load_plantvillage_from_tfrecords()
 
-        # Count filtered samples for splitting
-        print("  Counting filtered samples (corn/potato/tomato only)...")
+        print("  Counting filtered samples...")
         total = sum(1 for _ in ds)
 
     else:
-        #  No cache yet, use tfds.load to download
-        print("  No cache found — downloading via TFDS (first run only)...")
+        print("  No cache found — downloading via TFDS...")
         ds, info = tfds.load(
             "plant_village",
             split="train",
@@ -170,22 +190,20 @@ def load_plantvillage():
             as_supervised=True,
             shuffle_files=True,
         )
+
         label_names = info.features["label"].names
 
-        # Get indicies of classes in subset
         keep_indices = [
             i for i, name in enumerate(label_names)
             if name in PLANTVILLAGE_KEEP_LABELS
         ]
         keep_indices_tensor = tf.constant(keep_indices, dtype=tf.int64)
-        # Map old indicies to new (17-class-count) index range 
+
         old_to_new = {old: new for new, old in enumerate(keep_indices)}
 
-        # filter out samples outside the subset
         def filter_fn(image, label):
             return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
-        # Update indicies for filtered samples
         def remap_label(image, label):
             new_label = tf.py_function(
                 lambda l: old_to_new[int(l)], [label], tf.int64
@@ -193,30 +211,23 @@ def load_plantvillage():
             new_label.set_shape(())
             return image, new_label
 
-        # Preprocess image samples to resize and normalize
         def preprocess(image, label):
             image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE])
             image = tf.cast(image, tf.float32) / 255.0
             return image, label
 
-        # Filter, update indicies, preprocess dataset
-        ds = ds.filter(filter_fn).map(remap_label).map(
-            preprocess, num_parallel_calls=tf.data.AUTOTUNE
+        ds = (
+            ds
+            .filter(filter_fn)
+            .map(remap_label)
+            .map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
         )
-        # Get total sample count
-        total = info.splits["train"].num_examples
 
-    # Get actual train size from sample count
-    train_size = int(total * TRAIN_SPLIT)
+        # IMPORTANT: count AFTER filtering
+        total = sum(1 for _ in ds)
 
-    # Shuffle dataset
-    ds = ds.shuffle(buffer_size=total, seed=SEED)
-    # Split dataset into train and validation set
-    train_ds = ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-    val_ds = ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-
-    print(f"  PlantVillage — Total: {total} | Train: {train_size} | Val: {total - train_size}")
-    return train_ds, val_ds
+    print(f"  PlantVillage FULL dataset size: {total}")
+    return ds, total
 
 
 # =============================================================================
@@ -316,11 +327,8 @@ def load_cassava():
     print(f"  Cassava — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
-
-
 # Validate dataset integrity
 def validate_dataset(dataset, name, num_classes):
-    """Checks a single batch for expected shapes and label range."""
     for images, labels in dataset.take(1):
         print(f"\n[{name}] Batch check:")
         print(f"  Image batch shape: {images.shape}")
