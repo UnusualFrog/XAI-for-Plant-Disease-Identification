@@ -18,7 +18,8 @@ np.random.seed(SEED)
 def conv_bn_relu(x, filters, kernel_size, strides=1, padding="same"):
     # Apply standard convolution
     x = layers.Conv2D(filters, kernel_size, strides=strides,
-                      padding=padding, use_bias=False)(x)
+                  padding=padding, use_bias=False,
+                  kernel_initializer="he_normal")(x)
     # Normalize
     x = layers.BatchNormalization()(x)
     #ReLU activation
@@ -32,12 +33,14 @@ def depthwise_separable_bn_relu(x, filters, kernel_size, strides=1, padding="sam
 
     # Depthwise convolution, convolved channels independently
     x = layers.DepthwiseConv2D(kernel_size, strides=strides,
-                                padding=padding, use_bias=False)(x)
+                            padding=padding, use_bias=False,
+                            depthwise_initializer="he_normal")(x)
     x = layers.BatchNormalization()(x)
     x = layers.Activation("relu")(x)
     # 1×1 pointwise convolution, computes weighted sum across channels for each pixel for each filter
     # different filters extract increasingly abstract patterns
-    x = layers.Conv2D(filters, 1, padding="same", use_bias=False)(x)
+    x = layers.Conv2D(filters, 1, padding="same", use_bias=False,
+                  kernel_initializer="he_normal")(x)
     x = layers.BatchNormalization()(x)
     x = layers.Activation("relu")(x)
     return x
@@ -77,7 +80,8 @@ def modified_inception_a(x, filters_1x1, filters_3x3_reduce, filters_3x3,
     input_channels = residual.shape[-1]
     if input_channels != total_filters:
         # Project output channels into correct dimensions for ResNet integrity
-        residual = layers.Conv2D(total_filters, 1, padding="same", use_bias=False)(residual)
+        residual = layers.Conv2D(total_filters, 1, padding="same", use_bias=False,
+                         kernel_initializer="he_normal")(residual)
         residual = layers.BatchNormalization()(residual)
 
     # Combine output with input (ResNet)
@@ -186,15 +190,10 @@ def build_model(num_classes, input_shape=(256, 256, 3), dropout_rate=0.5):
     # 1. Load input
     inputs = layers.Input(shape=input_shape)
 
-    #2. One standard convolution with batch normalization and ReLU
-    x = conv_bn_relu(inputs, 32, 3)
-
-    #3. Three depthwise separable convolutions,two with Max Pooling
+    x = depthwise_separable_bn_relu(inputs, 32, 3)
     x = depthwise_separable_bn_relu(x, 64, 3)
     x = layers.MaxPooling2D(3, strides=2, padding="same")(x)
-
     x = depthwise_separable_bn_relu(x, 64, 3)
-
     x = depthwise_separable_bn_relu(x, 128, 3)
     x = layers.MaxPooling2D(3, strides=2, padding="same")(x)
 
@@ -264,6 +263,20 @@ if __name__ == "__main__":
     print("\nBuilding model for Cassava (5 classes)...")
     model_cassava = build_model(num_classes=5)
     print(f"Cassava model params: {model_cassava.count_params():,}")
+
+    test_input = tf.keras.Input(shape=(64, 64, 128))
+    test_out = modified_inception_a(
+        test_input,
+        filters_1x1=40,
+        filters_3x3_reduce=24, filters_3x3=48,
+        filters_5x5_reduce=12, filters_5x5=24,
+        filters_pool=24,
+    )
+    test_model = tf.keras.Model(test_input, test_out)
+    block_params = test_model.count_params()
+    print(f"Inception A block params: {block_params}")
+    assert abs(block_params - 11_808) / 11_808 < 0.05, \
+        f"Inception A params {block_params} too far from paper target 11,808"
 
 
 # =============================================================================

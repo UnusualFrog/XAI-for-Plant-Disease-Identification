@@ -86,6 +86,19 @@ def make_callbacks(dataset_name, fold=None, monitor="val_accuracy"):
         tf.keras.callbacks.CSVLogger(
             os.path.join(OUTPUT_DIR, f"log_{tag}.csv")
         ),
+        # Reduce learning rate when monitored metric plateaus
+        # factor=0.5 halves the LR on each trigger
+        # patience=5 waits 5 epochs of no improvement before reducing
+        # min_lr=1e-6 prevents LR decaying to zero
+        # mode is inferred from monitor name — min for loss, max for accuracy
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor=monitor,
+            factor=0.5,
+            patience=5,
+            min_lr=1e-6,
+            mode="min" if "loss" in monitor else "max",
+            verbose=1,
+        ),
     ]
 
 # Complile model with Adam optimizer and sparse categorical crossentropy loss to optimize accuracy
@@ -424,22 +437,28 @@ def run_training():
 
     #Main training runs
     pv_train, pv_val = load_plantvillage()
-    pv_train_size = int(15403 * 0.8) // BATCH_SIZE
+    pv_total = 15403
+    pv_train_size = int(pv_total * 0.8) // BATCH_SIZE
+
     all_summaries["plantvillage"] = train_dataset(
         "plantvillage", pv_train, pv_val, NUM_CLASSES["plantvillage"],
         train_size=pv_train_size
     )
 
+    rice_total = 5932
+    rice_train_size = int(rice_total * 0.8) // BATCH_SIZE
     rice_train, rice_val = load_rice()
     all_summaries["rice"] = train_dataset(
         "rice", rice_train, rice_val, NUM_CLASSES["rice"],
-        train_size=int(5932 * 0.8) // BATCH_SIZE
+        train_size=rice_train_size
     )
 
+    cassava_total = 5656
+    cassava_train_size = int(cassava_total * 0.8) // BATCH_SIZE
     cassava_train, cassava_val = load_cassava()
     all_summaries["cassava"] = train_dataset(
         "cassava", cassava_train, cassava_val, NUM_CLASSES["cassava"],
-        train_size=int(5656 * 0.8) // BATCH_SIZE
+        train_size=cassava_train_size
     )
 
     # Final summary across all datasets
@@ -495,10 +514,12 @@ if __name__ == "__main__":
     if choice == "1":
         run_training()
     elif choice == "2":
-        run_kfold()
+        pass
+        # run_kfold()
     elif choice == "3":
-        run_training()
-        run_kfold()
+        pass
+        # run_training()
+        # run_kfold()
     else:
         print(f"Invalid option '{choice}'. Please run again and enter 1, 2, or 3.")
 

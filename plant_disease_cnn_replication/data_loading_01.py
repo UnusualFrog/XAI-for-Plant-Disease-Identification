@@ -70,6 +70,11 @@ PLANTVILLAGE_KEEP_LABELS = [
     "Tomato___healthy",
 ]
 
+def preprocess_image(image, label):
+    image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE])
+    image = tf.cast(image, tf.float32) / 255.0
+    return image, label
+
 # Path to the downloaded PlantVillage tfrecords
 PLANTVILLAGE_CACHE_DIR = os.path.join(TFDS_DATA_DIR, "plant_village", "1.0.2")
 
@@ -108,8 +113,7 @@ def _load_plantvillage_from_tfrecords():
     def parse_example(serialized):
         features = tf.io.parse_single_example(serialized, feature_description)
         image = tf.image.decode_jpeg(features["image"], channels=3)
-        image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE])
-        image = tf.cast(image, tf.float32) / 255.0
+        # Remove resize and normalize from here — preprocess_image handles it
         label = features["label"]
         return image, label
 
@@ -131,12 +135,10 @@ def _load_plantvillage_from_tfrecords():
     ))
 
     ds = tf.data.TFRecordDataset(tfrecord_files)
-    # Load records
     ds = ds.map(parse_example, num_parallel_calls=tf.data.AUTOTUNE)
-    # Filter records outside subset
     ds = ds.filter(filter_fn)
-    # Update indicies to 17-classes
     ds = ds.map(remap_label, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)  # added
 
     return ds, label_names
 
@@ -149,12 +151,13 @@ def load_plantvillage():
     train_size = int(total * TRAIN_SPLIT)
 
     # Shuffle dataset
-    SHUFFLE_BUFFER = 2000
-    ds = ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED)
+    ds = ds.cache()
+    ds = ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
     # Split dataset into train and validate sets
     train_ds = (
         ds.take(train_size)
+        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
         .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
@@ -216,18 +219,12 @@ def load_plantvillage_full():
             new_label.set_shape(())
             return image, new_label
 
-        # Apply image resizing and normalization to 0-1 
-        def preprocess(image, label):
-            image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE])
-            image = tf.cast(image, tf.float32) / 255.0
-            return image, label
-
         # Filter out classes outside subset, update indicies and preprocess samples
         ds = (
             ds
             .filter(filter_fn)
-            .map(remap_label)
-            .map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+            .map(remap_label, num_parallel_calls=tf.data.AUTOTUNE)
+            .map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)  # shared function
         )
 
         # Get count of total samples
@@ -270,21 +267,21 @@ def load_rice():
     # normalize image
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
-
-    # preprocess dataset
+    
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
-
-    # Get total number of samples
+    full_ds = full_ds.cache()
     total = sum(1 for _ in full_ds)
-    # Get actual train set size based on sample count
     train_size = int(total * TRAIN_SPLIT)
-
-    # Shuffle dataset
-    SHUFFLE_BUFFER = 2000
-    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED)
+    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
     # Train/validation split of dataset
-    train_ds = full_ds.take(train_size).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    train_ds = (
+        full_ds.take(train_size)
+        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
+        .repeat()
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
     print(f"  Rice — Total: {total} | Train: {train_size} | Val: {total - train_size}")
@@ -324,19 +321,21 @@ def load_cassava():
     # normalize image   
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
+    
     # preprocess dataset
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
-
-    # Get total number of samples
+    full_ds = full_ds.cache()
     total = sum(1 for _ in full_ds)
-    # Get actual train set size based on sample count
     train_size = int(total * TRAIN_SPLIT)
+    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
-    # Shuffle dataset
-    SHUFFLE_BUFFER = 2000
-    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED)
-
-    train_ds = full_ds.take(train_size).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    train_ds = (
+        full_ds.take(train_size)
+        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
+        .repeat()
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     
     # Train/validation split of dataset
