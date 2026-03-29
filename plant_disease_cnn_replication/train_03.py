@@ -169,7 +169,7 @@ def evaluate_and_report(model, val_ds, dataset_name, num_classes, fold = None):
     return summary
 
 # Train model on training dataset
-def train_dataset(dataset_name, train_ds, val_ds, num_classes):
+def train_dataset(dataset_name, train_ds, val_ds, num_classes, train_size):
     print(f"\n{'='*60}")
     print(f"Training on {dataset_name} ({num_classes} classes)")
     print(f"{'='*60}")
@@ -184,6 +184,7 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes):
     # Train model on training data
     history = model.fit(
         train_ds,
+        steps_per_epoch=train_size,
         validation_data=val_ds,
         epochs=EPOCHS,
         callbacks=make_callbacks(dataset_name, monitor=monitor),
@@ -231,12 +232,9 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
     full_ds = full_ds.cache()
     total = sum(1 for _ in full_ds)
     fold_size = total // N_FOLDS
+    train_fold_size = (total - fold_size) // BATCH_SIZE
 
-    # FIX: Shuffle once with reshuffle_each_iteration=False so fold boundaries
-    # are consistent across epochs; without this the order changes each epoch
-    full_ds = full_ds.shuffle(
-        buffer_size=total, seed=SEED, reshuffle_each_iteration=False
-    )
+    full_ds = full_ds.shuffle(buffer_size=2000, seed=SEED, reshuffle_each_iteration=False)
 
     fold_summaries = []
 
@@ -257,7 +255,7 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
         # shuffle and batch training data
         train_ds = train_ds.shuffle(
             buffer_size=total - fold_size, seed=SEED
-        ).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+        ).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
         # shuffle validation data
         val_ds = val_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
@@ -271,6 +269,7 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
         # train model on training data
         history = model.fit(
             train_ds,
+            steps_per_epoch=train_fold_size,
             validation_data=val_ds,
             epochs=EPOCHS,
             callbacks=make_callbacks(dataset_name, fold=fold + 1, monitor=monitor),
@@ -323,13 +322,10 @@ def kfold_plantvillage(num_classes):
 
     # Get fold split size
     fold_size = total // N_FOLDS
+    train_fold_size = (total - fold_size) // BATCH_SIZE
     fold_summaries = []
 
-    # FIX: Shuffle once with reshuffle_each_iteration=False so fold boundaries
-    # are consistent across epochs
-    full_ds = full_ds.shuffle(
-        buffer_size=total, seed=SEED, reshuffle_each_iteration=False
-    )
+    full_ds = full_ds.shuffle(buffer_size=2000, seed=SEED, reshuffle_each_iteration=False)
 
     # Loop through folds
     for fold in range(N_FOLDS):
@@ -348,7 +344,7 @@ def kfold_plantvillage(num_classes):
         # Shuffle and batch training fold
         train_ds = train_ds.shuffle(
             buffer_size=total - fold_size, seed=SEED
-        ).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+        ).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
         # batch validation fold
         val_ds = val_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
@@ -360,6 +356,7 @@ def kfold_plantvillage(num_classes):
         # Train model on training fold data
         history = model.fit(
             train_ds,
+            steps_per_epoch=train_fold_size,
             validation_data=val_ds,
             epochs=EPOCHS,
             callbacks=make_callbacks("plantvillage", fold=fold + 1),
@@ -415,18 +412,22 @@ if __name__ == "__main__":
 
     #Main training runs
     pv_train, pv_val = load_plantvillage()
+    pv_train_size = int(15403 * 0.8) // BATCH_SIZE 
     all_summaries["plantvillage"] = train_dataset(
-        "plantvillage", pv_train, pv_val, NUM_CLASSES["plantvillage"]
+        "plantvillage", pv_train, pv_val, NUM_CLASSES["plantvillage"],
+        train_size=pv_train_size
     )
 
     rice_train, rice_val = load_rice()
     all_summaries["rice"] = train_dataset(
-        "rice", rice_train, rice_val, NUM_CLASSES["rice"]
+        "rice", rice_train, rice_val, NUM_CLASSES["rice"],
+        train_size=int(5932 * 0.8) // BATCH_SIZE
     )
 
     cassava_train, cassava_val = load_cassava()
     all_summaries["cassava"] = train_dataset(
-        "cassava", cassava_train, cassava_val, NUM_CLASSES["cassava"]
+        "cassava", cassava_train, cassava_val, NUM_CLASSES["cassava"],
+        train_size=int(5656 * 0.8) // BATCH_SIZE
     )
 
     #K-Fold cross-validation

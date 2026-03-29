@@ -149,11 +149,13 @@ def load_plantvillage():
     train_size = int(total * TRAIN_SPLIT)
 
     # Shuffle dataset
-    ds = ds.shuffle(buffer_size=total, seed=SEED)
+    SHUFFLE_BUFFER = 2000
+    ds = ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED)
 
     # Split dataset into train and validate sets
     train_ds = (
         ds.take(train_size)
+        .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
     )
@@ -176,8 +178,9 @@ def load_plantvillage_full():
         print("  Cache found — reading tfrecords directly")
         ds, label_names = _load_plantvillage_from_tfrecords()
 
-        print("  Counting filtered samples...")
-        total = sum(1 for _ in ds)
+        KNOWN_FILTERED_COUNT = 15403
+        print(f"  Using known sample count: {KNOWN_FILTERED_COUNT}")
+        total = KNOWN_FILTERED_COUNT
 
     else:
         print("  No cache found — downloading via TFDS...")
@@ -277,10 +280,11 @@ def load_rice():
     train_size = int(total * TRAIN_SPLIT)
 
     # Shuffle dataset
-    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED)
+    SHUFFLE_BUFFER = 2000
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED)
 
     # Train/validation split of dataset
-    train_ds = full_ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    train_ds = full_ds.take(train_size).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
     print(f"  Rice — Total: {total} | Train: {train_size} | Val: {total - train_size}")
@@ -329,9 +333,10 @@ def load_cassava():
     train_size = int(total * TRAIN_SPLIT)
 
     # Shuffle dataset
-    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED)
+    SHUFFLE_BUFFER = 2000
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED)
 
-    train_ds = full_ds.take(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    train_ds = full_ds.take(train_size).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     
     # Train/validation split of dataset
