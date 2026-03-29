@@ -24,7 +24,7 @@ np.random.seed(SEED)
 # Global Hyperparameters
 IMG_SIZE = 256
 # Note: batch size absent from paper, default of 32 used
-BATCH_SIZE = 32
+BATCH_SIZE = 16
 EPOCHS = 50
 TRAIN_SPLIT = 0.8
 VAL_SPLIT = 0.2

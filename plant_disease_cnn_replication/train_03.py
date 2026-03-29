@@ -11,7 +11,11 @@ Training protocol:
 
 """
 
-import os
+import tempfile, os
+# Disable cuDNN algorithm autotuning. The autotuner needs GPU scratch memory
+# to benchmark kernel configs — this fails when the BFC pool is near its
+# ceiling. Disabling it picks a safe default algorithm instead.
+os.environ["TF_CUDNN_USE_AUTOTUNE"] = "0"
 import json
 import numpy as np
 import matplotlib
@@ -23,10 +27,17 @@ from sklearn.metrics import confusion_matrix, classification_report
 
 import tensorflow as tf
 
-# GPU memory growth — must be set before any other TF operations
+import gc
+
+# Handle gpu
 gpus = tf.config.list_physical_devices("GPU")
-for gpu in gpus:
-    tf.config.experimental.set_memory_growth(gpu, True)
+if gpus:
+    tf.config.set_logical_device_configuration(
+        gpus[0],
+        [tf.config.LogicalDeviceConfiguration(memory_limit=4000)]
+        # 5.5GB of your 8GB: enough for training + k-fold XLA scratch,
+        # leaving ~2.5GB for the OS, display driver, and CPU-side pr2efetch.
+    )
 
 # Import project modules
 from data_loading_01 import (
@@ -48,6 +59,10 @@ DROPOUT_RATE = 0.5
 # Directory to output results of training
 OUTPUT_DIR = "./outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# FIX: Capped shuffle buffer to avoid OOM when filling buffer with full dataset;
+# same cap applied consistently across all pipelines
+SHUFFLE_BUFFER = 2000
 
 # Helper functions
 
@@ -205,6 +220,7 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes, train_size):
 
 # Crossvalidate the cassavana or rice dataset with 5 fold K-fold crossvalidation
 def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
+    KFOLD_BATCH_SIZE = 8
     print(f"\n{'='*60}")
     print(f"5-Fold CV — {dataset_name}")
     print(f"{'='*60}")
@@ -229,37 +245,34 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
 
     # Get count of samples for k-fold splititng, cache value to improve performance
-    full_ds = full_ds.cache()
+    cache_path = os.path.join(tempfile.gettempdir(), f"{dataset_name}_kfold_cache")
+    full_ds = full_ds.cache(cache_path)
     total = sum(1 for _ in full_ds)
     fold_size = total // N_FOLDS
-    train_fold_size = (total - fold_size) // BATCH_SIZE
+    train_fold_size = (total - fold_size) // KFOLD_BATCH_SIZE
 
-    full_ds = full_ds.shuffle(buffer_size=2000, seed=SEED, reshuffle_each_iteration=False)
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=False)
 
     fold_summaries = []
 
-    # Loop through each fold
     for fold in range(N_FOLDS):
-        print(f"\n--- Fold {fold + 1}/{N_FOLDS} ---")
+        if fold > 0:
+            del model
+            del train_ds, val_ds  # release pipeline references from previous fold
+            gc.collect()
 
-        # Get start and end range of validation set
         val_start = fold * fold_size
         val_end = val_start + fold_size
 
-        # Split data into training and validation folds
         val_ds = full_ds.skip(val_start).take(fold_size)
-        train_ds = full_ds.take(val_start).concatenate(
-            full_ds.skip(val_end)
-        )
+        train_ds = full_ds.take(val_start).concatenate(full_ds.skip(val_end))
 
-        # shuffle and batch training data
+        # FIX: Use KFOLD_BATCH_SIZE in .batch() — was incorrectly using BATCH_SIZE
         train_ds = train_ds.shuffle(
-            buffer_size=total - fold_size, seed=SEED
-        ).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-        # shuffle validation data
-        val_ds = val_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+            buffer_size=SHUFFLE_BUFFER, seed=SEED
+        ).repeat().batch(KFOLD_BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+        val_ds = val_ds.batch(KFOLD_BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
-        # build and complie model
         model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
         model = compile_model(model)
 
@@ -313,6 +326,7 @@ def kfold_local_dataset(dataset_name: str, data_dir: str, num_classes: int):
 
 # Perform 5 fold k-fold cross validation on plantvillage
 def kfold_plantvillage(num_classes):
+    KFOLD_BATCH_SIZE = 8    
     print(f"\n{'='*60}")
     print("5-Fold CV — PlantVillage")
     print(f"{'='*60}")
@@ -320,36 +334,35 @@ def kfold_plantvillage(num_classes):
     # Load full dataset
     full_ds, total = load_plantvillage_full()
 
+    cache_path = os.path.join(tempfile.gettempdir(), "plantvillage_kfold_cache")
+    full_ds = full_ds.cache(cache_path)
+
     # Get fold split size
     fold_size = total // N_FOLDS
-    train_fold_size = (total - fold_size) // BATCH_SIZE
+    train_fold_size = (total - fold_size) // KFOLD_BATCH_SIZE
     fold_summaries = []
 
-    full_ds = full_ds.shuffle(buffer_size=2000, seed=SEED, reshuffle_each_iteration=False)
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=False)
 
     # Loop through folds
     for fold in range(N_FOLDS):
-        print(f"\n--- Fold {fold + 1}/{N_FOLDS} ---")
+        if fold > 0:
+            del model
+            del train_ds, val_ds  # release pipeline references from previous fold
+            gc.collect()
 
-        # Get start and end range of validation set
         val_start = fold * fold_size
         val_end = val_start + fold_size
 
-        # Split into training and validation folds
         val_ds = full_ds.skip(val_start).take(fold_size)
-        train_ds = full_ds.take(val_start).concatenate(
-            full_ds.skip(val_end)
-        )
+        train_ds = full_ds.take(val_start).concatenate(full_ds.skip(val_end))
 
-        # Shuffle and batch training fold
+        # FIX: Use KFOLD_BATCH_SIZE in .batch() — was incorrectly using BATCH_SIZE
         train_ds = train_ds.shuffle(
-            buffer_size=total - fold_size, seed=SEED
-        ).repeat().batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+            buffer_size=SHUFFLE_BUFFER, seed=SEED
+        ).repeat().batch(KFOLD_BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+        val_ds = val_ds.batch(KFOLD_BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
-        # batch validation fold
-        val_ds = val_ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-
-        # Create blank model
         model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
         model = compile_model(model)
 
@@ -401,18 +414,17 @@ def kfold_plantvillage(num_classes):
     return fold_summaries
 
 
-# Main block
-if __name__ == "__main__":
-    print("=" * 60)
-    print("TensorFlow:", tf.__version__)
-    print("GPU:", tf.config.list_physical_devices("GPU"))
-    print("=" * 60)
+# =============================================================================
+# TRAINING ENTRY POINTS
+# =============================================================================
 
+def run_training():
+    """Run main 80/20 training on all three datasets."""
     all_summaries = {}
 
     #Main training runs
     pv_train, pv_val = load_plantvillage()
-    pv_train_size = int(15403 * 0.8) // BATCH_SIZE 
+    pv_train_size = int(15403 * 0.8) // BATCH_SIZE
     all_summaries["plantvillage"] = train_dataset(
         "plantvillage", pv_train, pv_val, NUM_CLASSES["plantvillage"],
         train_size=pv_train_size
@@ -430,16 +442,9 @@ if __name__ == "__main__":
         train_size=int(5656 * 0.8) // BATCH_SIZE
     )
 
-    #K-Fold cross-validation
-    # FIX: Capture return values so k-fold results are available in scope
-    # (previously discarded, making aggregate results inaccessible after the call)
-    pv_fold_summaries = kfold_plantvillage(NUM_CLASSES["plantvillage"])
-    rice_fold_summaries = kfold_local_dataset("rice", RICE_DATA_DIR, NUM_CLASSES["rice"])
-    cassava_fold_summaries = kfold_local_dataset("cassava", CASSAVA_DATA_DIR, NUM_CLASSES["cassava"])
-
     # Final summary across all datasets
     print("\n" + "=" * 60)
-    print("FINAL RESULTS SUMMARY")
+    print("TRAINING RESULTS SUMMARY")
     print("=" * 60)
     paper_targets = {
         "plantvillage": 0.9939,
@@ -457,6 +462,45 @@ if __name__ == "__main__":
         json.dump(all_summaries, f, indent=2)
 
     print("\n✅ Training complete. Results saved to ./outputs/")
+
+
+def run_kfold():
+    """Run 5-fold cross-validation on all three datasets."""
+    
+    pv_fold_summaries = kfold_plantvillage(NUM_CLASSES["plantvillage"])
+    rice_fold_summaries = kfold_local_dataset("rice", RICE_DATA_DIR, NUM_CLASSES["rice"])
+    cassava_fold_summaries = kfold_local_dataset("cassava", CASSAVA_DATA_DIR, NUM_CLASSES["cassava"])
+    print("\n✅ Cross-validation complete. Results saved to ./outputs/")
+
+
+# =============================================================================
+# MAIN BLOCK — Text UI
+# =============================================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("TensorFlow:", tf.__version__)
+    print("GPU:", tf.config.list_physical_devices("GPU"))
+    print("=" * 60)
+    print()
+    print("Plant Disease CNN Replication — Hassan & Maji (2022)")
+    print()
+    print("  1. Run training (all datasets, 80/20 split)")
+    print("  2. Run cross-validation (all datasets, 5-fold)")
+    print("  3. Run both (training then cross-validation)")
+    print()
+
+    choice = input("Select option [1/2/3]: ").strip()
+
+    if choice == "1":
+        run_training()
+    elif choice == "2":
+        run_kfold()
+    elif choice == "3":
+        run_training()
+        run_kfold()
+    else:
+        print(f"Invalid option '{choice}'. Please run again and enter 1, 2, or 3.")
 
 
 # =============================================================================

@@ -9,11 +9,6 @@ import tensorflow as tf
 layers = tf.keras.layers
 Model = tf.keras.Model
 
-# GPU Setup
-gpus = tf.config.list_physical_devices("GPU")
-for gpu in gpus:
-    tf.config.experimental.set_memory_growth(gpu, True)
-
 # Global Random Seed
 SEED = 42
 tf.random.set_seed(SEED)
