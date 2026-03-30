@@ -358,6 +358,71 @@ def load_cassava():
     print(f"  Cassava — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
+# Load data with second fold shuffle for fast validation
+def load_plantvillage_fold2():
+    ds, total = load_plantvillage_full()
+    train_size = int(total * TRAIN_SPLIT)
+    ds = ds.cache()
+    ds = ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+    train_ds = (
+        ds.take(train_size)
+        .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
+        .repeat()
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+    val_ds = ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    print(f"  PlantVillage Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
+    return train_ds, val_ds
+
+# Load data with second fold shuffle for fast validation
+def load_rice_fold2():
+    full_ds = tf.keras.utils.image_dataset_from_directory(
+        RICE_DATA_DIR, image_size=(IMG_SIZE, IMG_SIZE),
+        batch_size=None, shuffle=True, seed=SEED + 1, label_mode="int",
+    )
+    def normalize(image, label):
+        return tf.cast(image, tf.float32) / 255.0, label
+    full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
+    full_ds = full_ds.cache()
+    total = sum(1 for _ in full_ds)
+    train_size = int(total * TRAIN_SPLIT)
+    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+    train_ds = (
+        full_ds.take(train_size)
+        .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
+        .repeat()
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+    val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    print(f"  Rice Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
+    return train_ds, val_ds
+
+# Load data with second fold shuffle for fast validation
+def load_cassava_fold2():
+    full_ds = tf.keras.utils.image_dataset_from_directory(
+        CASSAVA_DATA_DIR, image_size=(IMG_SIZE, IMG_SIZE),
+        batch_size=None, shuffle=True, seed=SEED + 1, label_mode="int",
+    )
+    def normalize(image, label):
+        return tf.cast(image, tf.float32) / 255.0, label
+    full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
+    full_ds = full_ds.cache()
+    total = sum(1 for _ in full_ds)
+    train_size = int(total * TRAIN_SPLIT)
+    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+    train_ds = (
+        full_ds.take(train_size)
+        .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
+        .repeat()
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+    val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    print(f"  Cassava Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
+    return train_ds, val_ds
+
 # Validate dataset integrity
 def validate_dataset(dataset, name, num_classes):
     for images, labels in dataset.take(1):

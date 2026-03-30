@@ -31,8 +31,9 @@ if gpus:
 
 # Import project modules
 from data_loading_01 import (
-    load_plantvillage_full, load_plantvillage, load_rice, load_cassava,
-    NUM_CLASSES, EPOCHS, BATCH_SIZE, SEED,
+    load_plantvillage, load_rice, load_cassava,
+    load_plantvillage_fold2, load_rice_fold2, load_cassava_fold2,
+    NUM_CLASSES, EPOCHS, BATCH_SIZE, SEED
 )
 from model_02 import build_model
 
@@ -55,30 +56,21 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Added monitor parameter so Cassava can use val_loss instead of val_accuracy
 # due to class imbalance making val_accuracy an unreliable checkpoint signal
-def make_callbacks(dataset_name, monitor="val_accuracy"):
-    ckpt_path = os.path.join(OUTPUT_DIR, f"best_{dataset_name}.keras")
-
+def make_callbacks(dataset_name, monitor="val_accuracy", tag=None):
+    # tag allows fold2 outputs to use a distinct filename
+    filename = f"{dataset_name}_{tag}" if tag else dataset_name
+    ckpt_path = os.path.join(OUTPUT_DIR, f"best_{filename}.keras")
     return [
-        # Save model checkpoint at best monitored metric
         tf.keras.callbacks.ModelCheckpoint(
-            filepath=ckpt_path,
-            monitor=monitor,
-            save_best_only=True,
-            verbose=0,
+            filepath=ckpt_path, monitor=monitor,
+            save_best_only=True, verbose=0,
         ),
-        # Save per-epoch training metrics to CSV
         tf.keras.callbacks.CSVLogger(
-            os.path.join(OUTPUT_DIR, f"log_{dataset_name}.csv")
+            os.path.join(OUTPUT_DIR, f"log_{filename}.csv")
         ),
-        # Reduce learning rate by 0.5 when monitored metric plateaus
-        # mode inferred from monitor name, min for loss, max for accuracy
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor=monitor,
-            factor=0.5,
-            patience=5,
-            min_lr=1e-6,
-            mode="min" if "loss" in monitor else "max",
-            verbose=1,
+            monitor=monitor, factor=0.5, patience=5, min_lr=1e-6,
+            mode="min" if "loss" in monitor else "max", verbose=1,
         ),
     ]
 
@@ -92,14 +84,18 @@ def compile_model(model):
     return model
 
 # Plot accuracy and loss curves and save to outputs directory
-def plot_history(history, dataset_name):
+def plot_history(history, dataset_name, tag=None):
+    # Include validation fold in name if exists
+    display_name = f"{dataset_name} ({tag})" if tag else dataset_name
+    file_tag = f"{dataset_name}_{tag}" if tag else dataset_name
+
     # 1 row of 2 subplots
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     # Training vs. validation accuracy over epochs
     axes[0].plot(history.history["accuracy"], label="Train")
     axes[0].plot(history.history["val_accuracy"], label="Validation")
-    axes[0].set_title(f"{dataset_name} — Accuracy")
+    axes[0].set_title(f"{display_name} — Accuracy")
     axes[0].set_xlabel("Epoch")
     axes[0].set_ylabel("Accuracy")
     axes[0].legend()
@@ -107,18 +103,22 @@ def plot_history(history, dataset_name):
     # Training vs. validation loss over epochs
     axes[1].plot(history.history["loss"], label="Train")
     axes[1].plot(history.history["val_loss"], label="Validation")
-    axes[1].set_title(f"{dataset_name} — Loss")
+    axes[1].set_title(f"{display_name} — Loss")
     axes[1].set_xlabel("Epoch")
     axes[1].set_ylabel("Loss")
     axes[1].legend()
 
     plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, f"curves_{dataset_name}.png"), dpi=150)
+    plt.savefig(os.path.join(OUTPUT_DIR, f"curves_{file_tag}.png"), dpi=150)
     plt.close()
 
 # Evaluate model on validation dataset
 # Produces classification report, confusion matrix heatmap, and JSON summary
-def evaluate_and_report(model, val_ds, dataset_name, num_classes):
+def evaluate_and_report(model, val_ds, dataset_name, num_classes, tag=None):
+    # Include validation fold in name if exists
+    display_name = f"{dataset_name} ({tag})" if tag else dataset_name
+    file_tag = f"{dataset_name}_{tag}" if tag else dataset_name
+
     # Collect predictions and labels in a single pass to avoid ordering
     # mismatch between two separate iterations over val_ds
     y_true, y_pred = [], []
@@ -133,33 +133,33 @@ def evaluate_and_report(model, val_ds, dataset_name, num_classes):
     # Classification report produces precision, recall, F1, accuracy
     report = classification_report(y_true, y_pred, output_dict=True)
     report_text = classification_report(y_true, y_pred)
-    print(f"\n[{dataset_name}] Classification Report:\n{report_text}")
+    print(f"\n[{display_name}] Classification Report:\n{report_text}")
 
     # Save classification report to file
-    with open(os.path.join(OUTPUT_DIR, f"report_{dataset_name}.txt"), "w") as f:
+    with open(os.path.join(OUTPUT_DIR, f"report_{file_tag}.txt"), "w") as f:
         f.write(report_text)
 
     # Save confusion matrix heatmap to file
     cm = confusion_matrix(y_true, y_pred)
     fig, ax = plt.subplots(figsize=(max(6, num_classes), max(5, num_classes - 1)))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
-    ax.set_title(f"{dataset_name} Confusion Matrix")
+    ax.set_title(f"{display_name} Confusion Matrix")
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
     plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, f"cm_{dataset_name}.png"), dpi=150)
+    plt.savefig(os.path.join(OUTPUT_DIR, f"cm_{file_tag}.png"), dpi=150)
     plt.close()
 
     # Save scalar summary to JSON
     accuracy = np.sum(y_true == y_pred) / len(y_true)
     summary = {
-        "dataset": dataset_name,
+        "dataset": file_tag,
         "accuracy": float(accuracy),
         "macro_precision": float(report["macro avg"]["precision"]),
         "macro_recall": float(report["macro avg"]["recall"]),
         "macro_f1": float(report["macro avg"]["f1-score"]),
     }
-    with open(os.path.join(OUTPUT_DIR, f"summary_{dataset_name}.json"), "w") as f:
+    with open(os.path.join(OUTPUT_DIR, f"summary_{file_tag}.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
     print(f"  Accuracy:  {accuracy:.4f}")
@@ -170,16 +170,15 @@ def evaluate_and_report(model, val_ds, dataset_name, num_classes):
     return summary
 
 # Build, compile, train and evaluate model on a single dataset
-def train_dataset(dataset_name, train_ds, val_ds, num_classes, steps_per_epoch):
+def train_dataset(dataset_name, train_ds, val_ds, num_classes, steps_per_epoch, tag=None):
     print(f"\n{'='*60}")
-    print(f"Training on {dataset_name} ({num_classes} classes)")
+    label = f"{dataset_name} ({tag})" if tag else dataset_name
+    print(f"Training on {label} ({num_classes} classes)")
     print(f"{'='*60}")
 
     model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
     model = compile_model(model)
-
-    # Use val_loss monitor for Cassava due to class imbalance making
-    # val_accuracy an unreliable checkpoint signal
+    # Use val_loss for cassava to address class imbalance
     monitor = "val_loss" if dataset_name == "cassava" else "val_accuracy"
 
     history = model.fit(
@@ -187,21 +186,20 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes, steps_per_epoch):
         steps_per_epoch=steps_per_epoch,
         validation_data=val_ds,
         epochs=EPOCHS,
-        callbacks=make_callbacks(dataset_name, monitor=monitor),
+        callbacks=make_callbacks(dataset_name, monitor=monitor, tag=tag),
         verbose=1,
     )
 
-    plot_history(history, dataset_name)
+    plot_history(history, dataset_name, tag=tag)
 
-    # Load best checkpoint for evaluation
-    best_path = os.path.join(OUTPUT_DIR, f"best_{dataset_name}.keras")
+    # Load best model for evaluation
+    filename = f"{dataset_name}_{tag}" if tag else dataset_name
+    best_path = os.path.join(OUTPUT_DIR, f"best_{filename}.keras")
     if os.path.exists(best_path):
         model = tf.keras.models.load_model(best_path)
 
-    summary = evaluate_and_report(model, val_ds, dataset_name, num_classes)
+    summary = evaluate_and_report(model, val_ds, dataset_name, num_classes, tag=tag)
     return summary
-
-
 
 # Train model on each dataset
 def run_training():
@@ -256,6 +254,63 @@ def run_training():
         json.dump(all_summaries, f, indent=2)
 
     print("\n Training complete. Results saved to ./outputs/")
+    return all_summaries
+
+# Run independent 80/20 split for lightweight validation
+def run_fold2():
+    fold2_summaries = {}
+
+    pv_train, pv_val = load_plantvillage_fold2()
+    fold2_summaries["plantvillage"] = train_dataset(
+        "plantvillage", pv_train, pv_val,
+        NUM_CLASSES["plantvillage"],
+        steps_per_epoch=int(15403 * 0.8) // BATCH_SIZE,
+        tag="fold2",
+    )
+
+    rice_train, rice_val = load_rice_fold2()
+    fold2_summaries["rice"] = train_dataset(
+        "rice", rice_train, rice_val,
+        NUM_CLASSES["rice"],
+        steps_per_epoch=int(5932 * 0.8) // BATCH_SIZE,
+        tag="fold2",
+    )
+
+    cassava_train, cassava_val = load_cassava_fold2()
+    fold2_summaries["cassava"] = train_dataset(
+        "cassava", cassava_train, cassava_val,
+        NUM_CLASSES["cassava"],
+        steps_per_epoch=int(5656 * 0.8) // BATCH_SIZE,
+        tag="fold2",
+    )
+
+    with open(os.path.join(OUTPUT_DIR, "fold2_summary.json"), "w") as f:
+        json.dump(fold2_summaries, f, indent=2)
+
+    print("\n Fold 2 complete. Results saved to ./outputs/")
+    return fold2_summaries
+
+# Compare results of two different validation folds
+def compare_folds(fold1_summaries, fold2_summaries):
+    print("\n" + "=" * 60)
+    print("FOLD STABILITY COMPARISON (±5% threshold)")
+    print("=" * 60)
+    comparison = {}
+    for name in fold1_summaries:
+        a1 = fold1_summaries[name]["accuracy"]
+        a2 = fold2_summaries[name]["accuracy"]
+        delta = abs(a1 - a2)
+        status = "STABLE" if delta <= 0.05 else "UNSTABLE"
+        print(f"  {name:12s}  Fold1: {a1:.4f}  Fold2: {a2:.4f}  "
+              f"Δ: {delta:.4f}  {status}")
+        comparison[name] = {
+            "fold1_accuracy": a1,
+            "fold2_accuracy": a2,
+            "delta": float(delta),
+            "status": status,
+        }
+    with open(os.path.join(OUTPUT_DIR, "fold_comparison.json"), "w") as f:
+        json.dump(comparison, f, indent=2)
 
 # Main Block
 if __name__ == "__main__":
@@ -266,7 +321,19 @@ if __name__ == "__main__":
     print()
     print("Plant Disease CNN Replication — Hassan & Maji (2022)")
     print()
-    run_training()
+    print("  1. Run baseline training only")
+    print("  2. Run baseline + fold 2 stability check")
+    print()
+    choice = input("Select option [1/2]: ").strip()
+
+    if choice == "1":
+        run_training()
+    elif choice == "2":
+        fold1 = run_training()
+        fold2 = run_fold2()
+        compare_folds(fold1, fold2)
+    else:
+        print(f"Invalid option '{choice}'.")
 
 
 # =============================================================================
