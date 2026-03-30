@@ -23,12 +23,11 @@ np.random.seed(SEED)
 
 # Global Hyperparameters
 IMG_SIZE = 256
-# Note: batch size absent from paper, default of 32 used
+# Note: batch size absent from paper, default of 16 used
 BATCH_SIZE = 16
 EPOCHS = 50
 TRAIN_SPLIT = 0.8
 VAL_SPLIT = 0.2
-N_FOLDS = 5
 
 # Dataset-specific class counts
 NUM_CLASSES = {
@@ -70,6 +69,7 @@ PLANTVILLAGE_KEEP_LABELS = [
     "Tomato___healthy",
 ]
 
+# Helper image preprocessing function which resizes and normalizes to [0, 1]
 def preprocess_image(image, label):
     image = tf.image.resize(image, [IMG_SIZE, IMG_SIZE])
     image = tf.cast(image, tf.float32) / 255.0
@@ -78,7 +78,7 @@ def preprocess_image(image, label):
 # Path to the downloaded PlantVillage tfrecords
 PLANTVILLAGE_CACHE_DIR = os.path.join(TFDS_DATA_DIR, "plant_village", "1.0.2")
 
-# Check for existnce of cached dataset to prevent crash (See above note)
+# Check for existence of cached dataset to prevent crash (See above note)
 def _plantvillage_cache_exists():
     if not os.path.exists(PLANTVILLAGE_CACHE_DIR):
         return False
@@ -86,14 +86,14 @@ def _plantvillage_cache_exists():
              if f.endswith(".tfrecord-00000-of-00008")]
     return len(files) > 0
 
-# Load plantvillage dataset cache (See above note)
+# Load plantvillage dataset from local cache (See above note)
 def _load_plantvillage_from_tfrecords():
     # Read label names from the cache
     labels_path = os.path.join(PLANTVILLAGE_CACHE_DIR, "label.labels.txt")
     with open(labels_path, "r") as f:
         label_names = [line.strip() for line in f.readlines()]
 
-    # Get indices of the 17 classes we want to keep
+    # Get indices of the 17 classes of the subset
     keep_indices = [
         i for i, name in enumerate(label_names)
         if name in PLANTVILLAGE_KEEP_LABELS
@@ -113,7 +113,6 @@ def _load_plantvillage_from_tfrecords():
     def parse_example(serialized):
         features = tf.io.parse_single_example(serialized, feature_description)
         image = tf.image.decode_jpeg(features["image"], channels=3)
-        # Remove resize and normalize from here — preprocess_image handles it
         label = features["label"]
         return image, label
 
@@ -134,46 +133,21 @@ def _load_plantvillage_from_tfrecords():
         os.path.join(PLANTVILLAGE_CACHE_DIR, "plant_village-train.tfrecord*")
     ))
 
+    # Load full dataset from shards
     ds = tf.data.TFRecordDataset(tfrecord_files)
+    # Parse imgs and lbls
     ds = ds.map(parse_example, num_parallel_calls=tf.data.AUTOTUNE)
+    # Filter to subset
     ds = ds.filter(filter_fn)
+    # Fix label index for new subset count
     ds = ds.map(remap_label, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)  # added
+    # Preprocess images
+    ds = ds.map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
 
     return ds, label_names
 
-# Loads raw plantvillage dataset and performs shuffled train/validate split
-def load_plantvillage():
-    # Load raw dataset
-    ds, total = load_plantvillage_full()
-
-    # Get train/validate size
-    train_size = int(total * TRAIN_SPLIT)
-
-    # Shuffle dataset
-    ds = ds.cache()
-    ds = ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
-
-    # Split dataset into train and validate sets
-    train_ds = (
-        ds.take(train_size)
-        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
-        .repeat()
-        .batch(BATCH_SIZE)
-        .prefetch(tf.data.AUTOTUNE)
-    )
-
-    val_ds = (
-        ds.skip(train_size)
-        .batch(BATCH_SIZE)
-        .prefetch(tf.data.AUTOTUNE)
-    )
-
-    print(f"  PlantVillage — Total: {total} | Train: {train_size} | Val: {total - train_size}")
-    return train_ds, val_ds
-
-# Loads the raw plantvillage dataset without batching or shuffling for downstream k-fold cross validation
-# Attempts to load cached, if no cached, fallback to download through TFDS
+# Loads the raw plantvillage dataset without batching or shuffling
+# Attempts to load from cache; if no cache, falls back to download through TFDS
 def load_plantvillage_full():
     print("Loading PlantVillage dataset (full)...")
 
@@ -197,14 +171,14 @@ def load_plantvillage_full():
 
         label_names = info.features["label"].names
 
-        # Get indicies of subset classes
+        # Get indices of subset classes
         keep_indices = [
             i for i, name in enumerate(label_names)
             if name in PLANTVILLAGE_KEEP_LABELS
         ]
         keep_indices_tensor = tf.constant(keep_indices, dtype=tf.int64)
 
-        # Remap indicies to subset of 17 classes
+        # Remap indices to subset of 17 classes
         old_to_new = {old: new for new, old in enumerate(keep_indices)}
 
         # Filter out any classes outside the subset
@@ -219,12 +193,12 @@ def load_plantvillage_full():
             new_label.set_shape(())
             return image, new_label
 
-        # Filter out classes outside subset, update indicies and preprocess samples
+        # Filter out classes outside subset, update indices and preprocess samples
         ds = (
             ds
             .filter(filter_fn)
             .map(remap_label, num_parallel_calls=tf.data.AUTOTUNE)
-            .map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)  # shared function
+            .map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
         )
 
         # Get count of total samples
@@ -232,6 +206,37 @@ def load_plantvillage_full():
 
     print(f"  PlantVillage FULL dataset size: {total}")
     return ds, total
+
+# Loads plantvillage dataset and performs shuffled train/validate split
+def load_plantvillage():
+    # Load raw dataset
+    ds, total = load_plantvillage_full()
+
+    # Get train/validate size
+    train_size = int(total * TRAIN_SPLIT)
+
+    # Materialize and shuffle with a stable ordering for clean take/skip split
+    ds = ds.cache()
+    ds = ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
+
+    # Split dataset into train and validate sets
+    # Inner shuffle on train re-orders training samples each epoch independently
+    train_ds = (
+        ds.take(train_size)
+        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
+        .repeat()
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+    val_ds = (
+        ds.skip(train_size)
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+    print(f"  PlantVillage — Total: {total} | Train: {train_size} | Val: {total - train_size}")
+    return train_ds, val_ds
 
 
 # =============================================================================
@@ -264,17 +269,23 @@ def load_rice():
         label_mode="int",
     )
 
-    # normalize image
+    # Normalize pixel values to [0, 1]
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
-    
+
+    # Materialize and shuffle with a stable ordering for clean take/skip split
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
     full_ds = full_ds.cache()
+
+    # Get total samples
     total = sum(1 for _ in full_ds)
+    # Calculate train/validate split
     train_size = int(total * TRAIN_SPLIT)
+    # Shuffle dataset
     full_ds = full_ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
     # Train/validation split of dataset
+    # Inner shuffle on train re-orders training samples each epoch independently
     train_ds = (
         full_ds.take(train_size)
         .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
@@ -301,6 +312,7 @@ def load_rice():
 # =============================================================================
 
 CASSAVA_DATA_DIR = "./data/cassava_data"
+
 # Load cassava dataset locally
 def load_cassava():
     if not os.path.exists(CASSAVA_DATA_DIR):
@@ -318,17 +330,22 @@ def load_cassava():
         label_mode="int",
     )
 
-    # normalize image   
+    # Normalize pixel values to [0, 1]
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
-    
-    # preprocess dataset
+
+    # Materialize and shuffle with a stable ordering for clean take/skip split
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
     full_ds = full_ds.cache()
+    # Calculate total samples
     total = sum(1 for _ in full_ds)
+    # Calculate train/validate split
     train_size = int(total * TRAIN_SPLIT)
+    # Shuffle dataset
     full_ds = full_ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
+    # Train/validation split of dataset
+    # Inner shuffle on train re-orders training samples each epoch independently
     train_ds = (
         full_ds.take(train_size)
         .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
@@ -337,8 +354,7 @@ def load_cassava():
         .prefetch(tf.data.AUTOTUNE)
     )
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-    
-    # Train/validation split of dataset
+
     print(f"  Cassava — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
@@ -352,8 +368,7 @@ def validate_dataset(dataset, name, num_classes):
         print(f"  Label range: [{labels.numpy().min()}, {labels.numpy().max()}]")
         assert images.shape[1:] == (IMG_SIZE, IMG_SIZE, 3), "Unexpected image shape!"
         assert labels.numpy().max() < num_classes, "Label index out of range!"
-        print(f"  ✅ {name} sanity check passed.")
-
+        print(f"SUCCESS: {name} is valid.")
 
 # Main Block
 if __name__ == "__main__":
@@ -374,23 +389,22 @@ if __name__ == "__main__":
     cassava_train, cassava_val = load_cassava()
     validate_dataset(cassava_train, "Cassava", NUM_CLASSES["cassava"])
 
-    print("\n✅ Data loading step complete. Proceed to 02_model.py")
+    print("\n✅ Data loading step complete. Proceed to model_02.py")
 
 
-# Gaps
+# =============================================================================
+# REPLICATION GAPS
+# =============================================================================
 #
-# 1. BATCH SIZE — Not stated in the paper. Using 32 as default.
+# 1. BATCH SIZE — Not stated in the paper. Using 16 as default.
 #
 # 2. LEARNING RATE / OPTIMIZER SCHEDULE — Paper states Adam but gives
 #    no learning rate, decay, or schedule. Starting with 1e-3 in training step.
 #
-# 3. DROPOUT RATE — Mentioned in the paper but never quantified.
-#    Will use 0.5 in model definition; tune if validation accuracy is poor.
+# 3. DROPOUT RATE — Mentioned in the paper but never quantified, 0.5 assumed as default
+#    Will use 0.5 in model definition
 #
-# 4. DATA AUGMENTATION — Not described in the paper at all.
-#    No augmentation applied to stay faithful to the paper.
-#
-# 5. PLANTVILLAGE TFRECORD SCHEMA — The feature keys "image" and "label"
+# 4. PLANTVILLAGE TFRECORD SCHEMA — The feature keys "image" and "label"
 #    are inferred from the standard TFDS plant_village schema. If parsing
 #    fails on a fresh download, inspect the tfrecord with:
 #       import tensorflow as tf
