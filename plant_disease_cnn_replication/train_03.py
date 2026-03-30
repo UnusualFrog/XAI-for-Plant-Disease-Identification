@@ -1,11 +1,5 @@
 """
 Replication - Model Training
-
-Training protocol:
-  - Optimizer: Adam (paper states Adam, no LR given — see GAPS)
-  - Epochs: 50
-  - Split: 80% train / 20% validation
-  - Metrics: accuracy, precision, recall, F1-score, confusion matrix
 """
 
 import os
@@ -54,8 +48,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Helper functions
 
-# Added monitor parameter so Cassava can use val_loss instead of val_accuracy
-# due to class imbalance making val_accuracy an unreliable checkpoint signal
+# Callback function for saving best model version, saving training logs to csv, and learning rate reduction in training
 def make_callbacks(dataset_name, monitor="val_accuracy", tag=None):
     # tag allows fold2 outputs to use a distinct filename
     filename = f"{dataset_name}_{tag}" if tag else dataset_name
@@ -176,11 +169,13 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes, steps_per_epoch, 
     print(f"Training on {label} ({num_classes} classes)")
     print(f"{'='*60}")
 
+    # Build and complile blank model
     model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
     model = compile_model(model)
     # Use val_loss for cassava to address class imbalance
     monitor = "val_loss" if dataset_name == "cassava" else "val_accuracy"
 
+    # Train model on training data
     history = model.fit(
         train_ds,
         steps_per_epoch=steps_per_epoch,
@@ -244,6 +239,8 @@ def run_training():
         "rice": 0.9966,
         "cassava": 0.7659,
     }
+    
+    # Validate summary results
     for name, summary in all_summaries.items():
         target = paper_targets[name]
         delta = summary["accuracy"] - target
@@ -260,6 +257,7 @@ def run_training():
 def run_fold2():
     fold2_summaries = {}
 
+    # Load dataset with second-fold shuffle for validation 
     pv_train, pv_val = load_plantvillage_fold2()
     fold2_summaries["plantvillage"] = train_dataset(
         "plantvillage", pv_train, pv_val,
@@ -268,6 +266,7 @@ def run_fold2():
         tag="fold2",
     )
 
+    # Load dataset with second-fold shuffle for validation 
     rice_train, rice_val = load_rice_fold2()
     fold2_summaries["rice"] = train_dataset(
         "rice", rice_train, rice_val,
@@ -276,6 +275,7 @@ def run_fold2():
         tag="fold2",
     )
 
+    # Load dataset with second-fold shuffle for validation 
     cassava_train, cassava_val = load_cassava_fold2()
     fold2_summaries["cassava"] = train_dataset(
         "cassava", cassava_train, cassava_val,
@@ -284,6 +284,7 @@ def run_fold2():
         tag="fold2",
     )
 
+    # Save second fold validation results to file
     with open(os.path.join(OUTPUT_DIR, "fold2_summary.json"), "w") as f:
         json.dump(fold2_summaries, f, indent=2)
 
@@ -296,10 +297,13 @@ def compare_folds(fold1_summaries, fold2_summaries):
     print("FOLD STABILITY COMPARISON (±5% threshold)")
     print("=" * 60)
     comparison = {}
+
     for name in fold1_summaries:
         a1 = fold1_summaries[name]["accuracy"]
         a2 = fold2_summaries[name]["accuracy"]
+        # Compute difference in accuracy between fold1 and fold2
         delta = abs(a1 - a2)
+        # Stable if difference between folds is within 5%
         status = "STABLE" if delta <= 0.05 else "UNSTABLE"
         print(f"  {name:12s}  Fold1: {a1:.4f}  Fold2: {a2:.4f}  "
               f"Δ: {delta:.4f}  {status}")
@@ -319,7 +323,7 @@ if __name__ == "__main__":
     print("GPU:", tf.config.list_physical_devices("GPU"))
     print("=" * 60)
     print()
-    print("Plant Disease CNN Replication — Hassan & Maji (2022)")
+    print("Plant Disease CNN Replication")
     print()
     print("  1. Run baseline training only")
     print("  2. Run baseline + fold 2 stability check")

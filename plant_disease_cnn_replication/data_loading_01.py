@@ -215,12 +215,12 @@ def load_plantvillage():
     # Get train/validate size
     train_size = int(total * TRAIN_SPLIT)
 
-    # Materialize and shuffle with a stable ordering for clean take/skip split
+    # Create and shuffle with a stable ordering for clean take/skip split
     ds = ds.cache()
     ds = ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
     # Split dataset into train and validate sets
-    # Inner shuffle on train re-orders training samples each epoch independently
+    # Inner shuffle on reorders training samples each epoch independently
     train_ds = (
         ds.take(train_size)
         .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
@@ -285,7 +285,7 @@ def load_rice():
     full_ds = full_ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
     # Train/validation split of dataset
-    # Inner shuffle on train re-orders training samples each epoch independently
+    # Inner shuffle reorders training samples each epoch independently
     train_ds = (
         full_ds.take(train_size)
         .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
@@ -360,10 +360,17 @@ def load_cassava():
 
 # Load data with second fold shuffle for fast validation
 def load_plantvillage_fold2():
+    # Load dataset
     ds, total = load_plantvillage_full()
+
+    # Get train/val split size
     train_size = int(total * TRAIN_SPLIT)
+
+    # Cache and suffle dataset
     ds = ds.cache()
     ds = ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+
+    # Split into train/validation sets
     train_ds = (
         ds.take(train_size)
         .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
@@ -372,22 +379,31 @@ def load_plantvillage_fold2():
         .prefetch(tf.data.AUTOTUNE)
     )
     val_ds = ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+
     print(f"  PlantVillage Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
 # Load data with second fold shuffle for fast validation
 def load_rice_fold2():
+    # Load dataset
     full_ds = tf.keras.utils.image_dataset_from_directory(
         RICE_DATA_DIR, image_size=(IMG_SIZE, IMG_SIZE),
         batch_size=None, shuffle=True, seed=SEED + 1, label_mode="int",
     )
+
+    # Normalize image to 0,1
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
+    
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
     full_ds = full_ds.cache()
+
+    # Train/Validate split
     total = sum(1 for _ in full_ds)
     train_size = int(total * TRAIN_SPLIT)
+    # Shuffle dataset
     full_ds = full_ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+
     train_ds = (
         full_ds.take(train_size)
         .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
@@ -396,19 +412,24 @@ def load_rice_fold2():
         .prefetch(tf.data.AUTOTUNE)
     )
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+
     print(f"  Rice Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
 # Load data with second fold shuffle for fast validation
 def load_cassava_fold2():
+    # Load dataset
     full_ds = tf.keras.utils.image_dataset_from_directory(
         CASSAVA_DATA_DIR, image_size=(IMG_SIZE, IMG_SIZE),
         batch_size=None, shuffle=True, seed=SEED + 1, label_mode="int",
     )
+    # Normalize values to range of 0 to 1
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
     full_ds = full_ds.cache()
+
+    # Train/validate split
     total = sum(1 for _ in full_ds)
     train_size = int(total * TRAIN_SPLIT)
     full_ds = full_ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
@@ -420,6 +441,7 @@ def load_cassava_fold2():
         .prefetch(tf.data.AUTOTUNE)
     )
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    
     print(f"  Cassava Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
