@@ -5,7 +5,13 @@ plant_disease_cnn_replication/data/**
 # Ignore outputs but keep folder
 plant_disease_cnn_replication/outputs/**
 !plant_disease_cnn_replication/outputs/.gitkeep
-!plant_disease_cnn_replication/outputs/explain/.gitkeep
+!plant_disease_cnn_replication/outputs/explain/
+!plant_disease_cnn_replication/outputs/explain/gradcam/
+!plant_disease_cnn_replication/outputs/explain/gradcam/.gitkeep
+!plant_disease_cnn_replication/outputs/explain/lime/
+!plant_disease_cnn_replication/outputs/explain/lime/.gitkeep
+!plant_disease_cnn_replication/outputs/explain/shap/
+!plant_disease_cnn_replication/outputs/explain/shap/.gitkeep
 
 # TFDS
 _tfds_logging/
