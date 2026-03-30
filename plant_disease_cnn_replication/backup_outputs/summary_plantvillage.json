@@ -1,0 +1,8 @@
+{
+  "dataset": "plantvillage",
+  "fold": null,
+  "accuracy": 0.9935086011035378,
+  "macro_precision": 0.9939676573833718,
+  "macro_recall": 0.993382318252189,
+  "macro_f1": 0.9936706717990895
+}

@@ -1,0 +1,8 @@
+{
+  "dataset": "cassava",
+  "fold": null,
+  "accuracy": 0.7438162544169611,
+  "macro_precision": 0.675253328048527,
+  "macro_recall": 0.6114242993057871,
+  "macro_f1": 0.6016949791127763
+}
