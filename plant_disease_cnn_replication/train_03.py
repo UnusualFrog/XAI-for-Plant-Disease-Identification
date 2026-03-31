@@ -344,11 +344,11 @@ if __name__ == "__main__":
 # REPLICATION GAPS
 # =============================================================================
 #
-# 1. LEARNING RATE — Paper states Adam but gives no learning rate, decay,
-#    or schedule. Using 1e-3 (Adam default).
+# 1. Paper states Adam but gives no learning rate, decay,
+#    or schedule, using 1e-3 (Adam default)
 #
-# 2. BATCH SIZE — Not stated in paper. Using 16.
+# 2. Batch size not stated in paper, using 16
 #
-# 3. DROPOUT RATE — Not stated. Using 0.5.
+# 3. Dropout rate not stated, using 0.5.
 #
 # =============================================================================
