@@ -285,6 +285,6 @@ if __name__ == "__main__":
 # 3. No dropout rate stated in paper default here is 0.5
 #
 # 4. Paper does not state reduction block stride values explicitly.
-#    Stride of2 is used in both reduction blocks to halve spatial dimensions,
+#    Stride of 2 is used in both reduction blocks to halve spatial dimensions,
 #    which is standard for reduction blocks in Inception
 # =============================================================================
