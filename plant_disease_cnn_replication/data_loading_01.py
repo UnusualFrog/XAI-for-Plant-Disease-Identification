@@ -441,7 +441,7 @@ def load_cassava_fold2():
         .prefetch(tf.data.AUTOTUNE)
     )
     val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-    
+
     print(f"  Cassava Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
@@ -476,24 +476,22 @@ if __name__ == "__main__":
     cassava_train, cassava_val = load_cassava()
     validate_dataset(cassava_train, "Cassava", NUM_CLASSES["cassava"])
 
-    print("\n✅ Data loading step complete. Proceed to model_02.py")
+    print("\nSUCCESS: Data loading step complete. Proceed to model_02.py")
 
 
 # =============================================================================
 # REPLICATION GAPS
 # =============================================================================
 #
-# 1. BATCH SIZE — Not stated in the paper. Using 16 as default.
+# 1. Batch size not stated in the paper, using 16 as default
 #
-# 2. LEARNING RATE / OPTIMIZER SCHEDULE — Paper states Adam but gives
-#    no learning rate, decay, or schedule. Starting with 1e-3 in training step.
+# 2. Paper states Adam but gives no learning rate, decay, or schedule, default
+#    starting value of 1e-3
 #
-# 3. DROPOUT RATE — Mentioned in the paper but never quantified, 0.5 assumed as default
-#    Will use 0.5 in model definition
+# 3. Droout mentioned in the paper but never quantified, 0.5 assumed as default
 #
-# 4. PLANTVILLAGE TFRECORD SCHEMA — The feature keys "image" and "label"
-#    are inferred from the standard TFDS plant_village schema. If parsing
-#    fails on a fresh download, inspect the tfrecord with:
+# 4. The feature keys "image" and "label" are inferred from the standard TFDS plant_village schema.
+#    If parsing fails on a fresh download, inspect the tfrecord with:
 #       import tensorflow as tf
 #       raw = next(iter(tf.data.TFRecordDataset([<path_to_shard>])))
 #       print(tf.train.Example.FromString(raw.numpy()))

@@ -271,34 +271,20 @@ if __name__ == "__main__":
     model_cassava = build_model(num_classes=5)
     print(f"Cassava model params: {model_cassava.count_params():,}")
 
-    # verify Inception A block parameter count against paper target
-    test_input = tf.keras.Input(shape=(64, 64, 128))
-    test_out = modified_inception_a(
-        test_input,
-        filters_1x1=40,
-        filters_3x3_reduce=24, filters_3x3=48,
-        filters_5x5_reduce=12, filters_5x5=24,
-        filters_pool=24,
-    )
-    test_model = tf.keras.Model(test_input, test_out)
-    block_params = test_model.count_params()
-    print(f"\nInception A block params: {block_params}")
-    assert abs(block_params - 11_808) / 11_808 < 0.05, \
-        f"ERROR: Inception A params {block_params} too far from paper target 11,808"
-    print("SUCCESS: Inception A block within 5% of paper target (11,808).")
-
 
 # =============================================================================
 # REPLICATION GAPS
 # =============================================================================
-#
 # 1. The authors state the parameter count (428,100) but never publish the
 #    filter counts per block that produce it.
 #
-# 2. DROPOUT RATE — Stated in paper as used but never quantified.
-#    Default here is 0.5. Tune if validation accuracy is poor.
+# 2. The paper reports 11,808 parameters for the modified Inception A block,
+#    but this figure was computed with an unknown input channel depth 
+#    determined by the undisclosed entry flow configuration
 #
-# 3. REDUCTION BLOCK STRIDES — Paper does not state stride values explicitly.
-#    Stride=2 is used in both reduction blocks to halve spatial dimensions,
-#    which is standard practice for reduction blocks in Inception architectures.
+# 3. No dropout rate stated in paper default here is 0.5
+#
+# 4. Paper does not state reduction block stride values explicitly.
+#    Stride of2 is used in both reduction blocks to halve spatial dimensions,
+#    which is standard for reduction blocks in Inception
 # =============================================================================
