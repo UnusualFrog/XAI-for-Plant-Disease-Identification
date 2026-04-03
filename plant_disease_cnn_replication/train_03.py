@@ -201,9 +201,8 @@ def run_training():
     all_summaries = {}
 
     # PlantVillage
-    pv_train, pv_val = load_plantvillage()
-    # 80/20 split in batches of 16
-    pv_train_size = int(15403 * 0.8) // BATCH_SIZE
+    pv_train, pv_val, pv_total = load_plantvillage()
+    pv_train_size = int(pv_total * 0.8) // BATCH_SIZE
     all_summaries["plantvillage"] = train_dataset(
         "plantvillage", pv_train, pv_val,
         NUM_CLASSES["plantvillage"],
@@ -258,11 +257,11 @@ def run_fold2():
     fold2_summaries = {}
 
     # Load dataset with second-fold shuffle for validation 
-    pv_train, pv_val = load_plantvillage_fold2()
+    pv_train, pv_val, pv_total = load_plantvillage_fold2()
     fold2_summaries["plantvillage"] = train_dataset(
         "plantvillage", pv_train, pv_val,
         NUM_CLASSES["plantvillage"],
-        steps_per_epoch=int(15403 * 0.8) // BATCH_SIZE,
+        steps_per_epoch=int(pv_total * 0.8) // BATCH_SIZE,
         tag="fold2",
     )
 

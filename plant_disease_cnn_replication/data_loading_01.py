@@ -50,16 +50,16 @@ NUM_CLASSES = {
 
 # Labels in TFDS that correspond to the paper's 17 corn/potato/tomato classes
 PLANTVILLAGE_KEEP_LABELS = [
-    "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot",
-    "Corn_(maize)___Common_rust_",
-    "Corn_(maize)___Northern_Leaf_Blight",
-    "Corn_(maize)___healthy",
-    "Potato___Early_Blight",
-    "Potato___Late_Blight",
+    "Corn___Cercospora_leaf_spot Gray_leaf_spot",  # was Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot
+    "Corn___Common_rust",                           # was Corn_(maize)___Common_rust_  (trailing underscore)
+    "Corn___Northern_Leaf_Blight",                  # was Corn_(maize)___Northern_Leaf_Blight
+    "Corn___healthy",                               # was Corn_(maize)___healthy
+    "Potato___Early_blight",                        # was Potato___Early_Blight  (lowercase b)
+    "Potato___Late_blight",                         # was Potato___Late_Blight   (lowercase b)
     "Potato___healthy",
     "Tomato___Bacterial_spot",
-    "Tomato___Early_Blight",
-    "Tomato___Late_Blight",
+    "Tomato___Early_blight",                        # was Tomato___Early_Blight  (lowercase b)
+    "Tomato___Late_blight",                         # was Tomato___Late_Blight   (lowercase b)
     "Tomato___Leaf_Mold",
     "Tomato___Septoria_leaf_spot",
     "Tomato___Spider_mites Two-spotted_spider_mite",
@@ -109,6 +109,11 @@ def _load_plantvillage_from_tfrecords():
         "label": tf.io.FixedLenFeature([], tf.int64),
     }
 
+    # Validate cahced labels
+    # matched = [name for name in label_names if name in PLANTVILLAGE_KEEP_LABELS]
+    # print(f"Matched {len(matched)} of {len(PLANTVILLAGE_KEEP_LABELS)} expected labels")
+    # print("Unmatched:", [l for l in PLANTVILLAGE_KEEP_LABELS if l not in label_names])
+
     # Parse local record data into image and label
     def parse_example(serialized):
         features = tf.io.parse_single_example(serialized, feature_description)
@@ -155,9 +160,9 @@ def load_plantvillage_full():
         print("  Cache found — reading tfrecords directly")
         ds, label_names = _load_plantvillage_from_tfrecords()
 
-        KNOWN_FILTERED_COUNT = 15403
-        print(f"  Using known sample count: {KNOWN_FILTERED_COUNT}")
-        total = KNOWN_FILTERED_COUNT
+        print("  Counting filtered samples...")
+        total = sum(1 for _ in ds)
+        print(f"  Filtered sample count: {total}")
 
     else:
         print("  No cache found — downloading via TFDS...")
@@ -236,7 +241,7 @@ def load_plantvillage():
     )
 
     print(f"  PlantVillage — Total: {total} | Train: {train_size} | Val: {total - train_size}")
-    return train_ds, val_ds
+    return train_ds, val_ds, total
 
 
 # =============================================================================
@@ -381,7 +386,7 @@ def load_plantvillage_fold2():
     val_ds = ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
 
     print(f"  PlantVillage Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
-    return train_ds, val_ds
+    return train_ds, val_ds, total
 
 # Load data with second fold shuffle for fast validation
 def load_rice_fold2():
@@ -465,7 +470,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Load PlantVillage
-    pv_train, pv_val = load_plantvillage()
+    pv_train, pv_val, _ = load_plantvillage()
     validate_dataset(pv_train, "PlantVillage", NUM_CLASSES["plantvillage"])
 
     # Load Rice disease
