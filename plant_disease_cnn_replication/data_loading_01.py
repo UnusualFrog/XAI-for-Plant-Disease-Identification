@@ -29,12 +29,21 @@ EPOCHS = 50
 TRAIN_SPLIT = 0.8
 VAL_SPLIT = 0.2
 
+# Shuffle buffer cap — prevents RAM exhaustion from full-dataset buffers.
+# At 256x256x3 float32 (~0.75 MB/image), buffer_size=total would require
+# ~14.5 GB for PlantVillage alone. 2000 images (~1.5 GB) gives adequate
+# shuffling quality without OOM risk.
+SHUFFLE_BUFFER = 2000
+
 # Dataset-specific class counts
 NUM_CLASSES = {
     "plantvillage": 17,
     "rice": 4,
     "cassava": 5,
 }
+
+# Ensure disk cache directory exists before any dataset is loaded
+os.makedirs("./cache", exist_ok=True)
 
 # =============================================================================
 # PLANTVILLAGE DATASET
@@ -86,6 +95,17 @@ def _plantvillage_cache_exists():
              if f.endswith(".tfrecord-00000-of-00008")]
     return len(files) > 0
 
+# Build a static label remapping lookup table — runs entirely in the TF graph
+# with no Python round-trips or GIL contention
+def _build_remap_table(old_to_new):
+    return tf.lookup.StaticHashTable(
+        tf.lookup.KeyValueTensorInitializer(
+            keys=tf.constant(list(old_to_new.keys()), dtype=tf.int64),
+            values=tf.constant(list(old_to_new.values()), dtype=tf.int64),
+        ),
+        default_value=-1,
+    )
+
 # Load plantvillage dataset from local cache (See above note)
 def _load_plantvillage_from_tfrecords():
     # Read label names from the cache
@@ -109,7 +129,7 @@ def _load_plantvillage_from_tfrecords():
         "label": tf.io.FixedLenFeature([], tf.int64),
     }
 
-    # Validate cahced labels
+    # Validate cached labels
     # matched = [name for name in label_names if name in PLANTVILLAGE_KEEP_LABELS]
     # print(f"Matched {len(matched)} of {len(PLANTVILLAGE_KEEP_LABELS)} expected labels")
     # print("Unmatched:", [l for l in PLANTVILLAGE_KEEP_LABELS if l not in label_names])
@@ -125,12 +145,11 @@ def _load_plantvillage_from_tfrecords():
     def filter_fn(image, label):
         return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
-    # Fix label index on filtered samples
+    # Build a static lookup table — no Python callback, no GIL
+    lookup_table = _build_remap_table(old_to_new)
+
     def remap_label(image, label):
-        new_label = tf.py_function(
-            lambda l: old_to_new[int(l)], [label], tf.int64
-        )
-        new_label.set_shape(())
+        new_label = lookup_table.lookup(label)
         return image, new_label
 
     # Load all 8 tfrecord shards from cache
@@ -138,15 +157,11 @@ def _load_plantvillage_from_tfrecords():
         os.path.join(PLANTVILLAGE_CACHE_DIR, "plant_village-train.tfrecord*")
     ))
 
-    # Load full dataset from shards
+    # Load full dataset from shards, parse, filter, remap, and preprocess
     ds = tf.data.TFRecordDataset(tfrecord_files)
-    # Parse imgs and lbls
     ds = ds.map(parse_example, num_parallel_calls=tf.data.AUTOTUNE)
-    # Filter to subset
     ds = ds.filter(filter_fn)
-    # Fix label index for new subset count
     ds = ds.map(remap_label, num_parallel_calls=tf.data.AUTOTUNE)
-    # Preprocess images
     ds = ds.map(preprocess_image, num_parallel_calls=tf.data.AUTOTUNE)
 
     return ds, label_names
@@ -190,15 +205,14 @@ def load_plantvillage_full():
         def filter_fn(image, label):
             return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
-        # Remap old indexes to new range
+        # Build a static lookup table — no Python callback, no GIL
+        lookup_table = _build_remap_table(old_to_new)
+
         def remap_label(image, label):
-            new_label = tf.py_function(
-                lambda l: old_to_new[int(l)], [label], tf.int64
-            )
-            new_label.set_shape(())
+            new_label = lookup_table.lookup(label)
             return image, new_label
 
-        # Filter out classes outside subset, update indices and preprocess samples
+        # Filter, remap, and preprocess
         ds = (
             ds
             .filter(filter_fn)
@@ -212,23 +226,27 @@ def load_plantvillage_full():
     print(f"  PlantVillage FULL dataset size: {total}")
     return ds, total
 
-# Loads plantvillage dataset and performs shuffled train/validate split
-def load_plantvillage():
-    # Load raw dataset
-    ds, total = load_plantvillage_full()
 
-    # Get train/validate size
+# Loads plantvillage dataset and performs shuffled train/validate split
+# Cache is placed AFTER take/skip to avoid partial-read cache truncation.
+# Placing cache before take/skip triggers the TF warning:
+#   "dataset.cache().take(k)" discards the cache on each epoch because the
+#   iterator never fully reads it. The correct pattern is "take(k).cache()".
+def load_plantvillage():
+    ds, total = load_plantvillage_full()
     train_size = int(total * TRAIN_SPLIT)
 
-    # Create and shuffle with a stable ordering for clean take/skip split
-    ds = ds.cache()
-    ds = ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
+    # Stable one-time shuffle determines the train/val split boundary.
+    # SHUFFLE_BUFFER is used instead of total to prevent RAM exhaustion —
+    # full-dataset buffer at 256x256x3 float32 would require ~14.5 GB.
+    ds = ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=False)
 
-    # Split dataset into train and validate sets
-    # Inner shuffle on reorders training samples each epoch independently
+    # Cache placed after take/skip: each subset is read fully on first epoch
+    # and served from disk on all subsequent epochs
     train_ds = (
         ds.take(train_size)
-        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
+        .cache("./cache/plantvillage_train")
+        .shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=True)
         .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
@@ -236,6 +254,7 @@ def load_plantvillage():
 
     val_ds = (
         ds.skip(train_size)
+        .cache("./cache/plantvillage_val")
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
     )
@@ -278,27 +297,30 @@ def load_rice():
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
 
-    # Materialize and shuffle with a stable ordering for clean take/skip split
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
-    full_ds = full_ds.cache()
 
-    # Get total samples
     total = sum(1 for _ in full_ds)
-    # Calculate train/validate split
     train_size = int(total * TRAIN_SPLIT)
-    # Shuffle dataset
-    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
-    # Train/validation split of dataset
-    # Inner shuffle reorders training samples each epoch independently
+    # Stable one-time shuffle determines the train/val split boundary
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=False)
+
+    # Cache placed after take/skip: each subset is read fully on first epoch
+    # and served from disk on all subsequent epochs
     train_ds = (
         full_ds.take(train_size)
-        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
+        .cache("./cache/rice_train")
+        .shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=True)
         .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
     )
-    val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    val_ds = (
+        full_ds.skip(train_size)
+        .cache("./cache/rice_val")
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
 
     print(f"  Rice — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
@@ -339,116 +361,132 @@ def load_cassava():
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
 
-    # Materialize and shuffle with a stable ordering for clean take/skip split
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
-    full_ds = full_ds.cache()
-    # Calculate total samples
-    total = sum(1 for _ in full_ds)
-    # Calculate train/validate split
-    train_size = int(total * TRAIN_SPLIT)
-    # Shuffle dataset
-    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED, reshuffle_each_iteration=False)
 
-    # Train/validation split of dataset
-    # Inner shuffle on train re-orders training samples each epoch independently
+    total = sum(1 for _ in full_ds)
+    train_size = int(total * TRAIN_SPLIT)
+
+    # Stable one-time shuffle determines the train/val split boundary
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=False)
+
+    # Cache placed after take/skip: each subset is read fully on first epoch
+    # and served from disk on all subsequent epochs
     train_ds = (
         full_ds.take(train_size)
-        .shuffle(buffer_size=train_size, seed=SEED, reshuffle_each_iteration=True)
+        .cache("./cache/cassava_train")
+        .shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=True)
         .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
     )
-    val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    val_ds = (
+        full_ds.skip(train_size)
+        .cache("./cache/cassava_val")
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
 
     print(f"  Cassava — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
-# Load data with second fold shuffle for fast validation
-def load_plantvillage_fold2():
-    # Load dataset
-    ds, total = load_plantvillage_full()
 
-    # Get train/val split size
+# Load data with second fold shuffle for stability validation
+def load_plantvillage_fold2():
+    ds, total = load_plantvillage_full()
     train_size = int(total * TRAIN_SPLIT)
 
-    # Cache and suffle dataset
-    ds = ds.cache()
-    ds = ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+    ds = ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED + 1, reshuffle_each_iteration=False)
 
-    # Split into train/validation sets
     train_ds = (
         ds.take(train_size)
-        .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
+        .cache("./cache/plantvillage_fold2_train")
+        .shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED + 1, reshuffle_each_iteration=True)
         .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
     )
-    val_ds = ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    val_ds = (
+        ds.skip(train_size)
+        .cache("./cache/plantvillage_fold2_val")
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
 
     print(f"  PlantVillage Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds, total
 
-# Load data with second fold shuffle for fast validation
+
+# Load data with second fold shuffle for stability validation
 def load_rice_fold2():
-    # Load dataset
     full_ds = tf.keras.utils.image_dataset_from_directory(
         RICE_DATA_DIR, image_size=(IMG_SIZE, IMG_SIZE),
         batch_size=None, shuffle=True, seed=SEED + 1, label_mode="int",
     )
 
-    # Normalize image to 0,1
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
-    
-    full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
-    full_ds = full_ds.cache()
 
-    # Train/Validate split
+    full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
+
     total = sum(1 for _ in full_ds)
     train_size = int(total * TRAIN_SPLIT)
-    # Shuffle dataset
-    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED + 1, reshuffle_each_iteration=False)
 
     train_ds = (
         full_ds.take(train_size)
-        .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
+        .cache("./cache/rice_fold2_train")
+        .shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED + 1, reshuffle_each_iteration=True)
         .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
     )
-    val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    val_ds = (
+        full_ds.skip(train_size)
+        .cache("./cache/rice_fold2_val")
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
 
     print(f"  Rice Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
 
-# Load data with second fold shuffle for fast validation
+
+# Load data with second fold shuffle for stability validation
 def load_cassava_fold2():
-    # Load dataset
     full_ds = tf.keras.utils.image_dataset_from_directory(
         CASSAVA_DATA_DIR, image_size=(IMG_SIZE, IMG_SIZE),
         batch_size=None, shuffle=True, seed=SEED + 1, label_mode="int",
     )
-    # Normalize values to range of 0 to 1
+
     def normalize(image, label):
         return tf.cast(image, tf.float32) / 255.0, label
-    full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
-    full_ds = full_ds.cache()
 
-    # Train/validate split
+    full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
+
     total = sum(1 for _ in full_ds)
     train_size = int(total * TRAIN_SPLIT)
-    full_ds = full_ds.shuffle(buffer_size=total, seed=SEED + 1, reshuffle_each_iteration=False)
+
+    full_ds = full_ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED + 1, reshuffle_each_iteration=False)
+
     train_ds = (
         full_ds.take(train_size)
-        .shuffle(buffer_size=train_size, seed=SEED + 1, reshuffle_each_iteration=True)
+        .cache("./cache/cassava_fold2_train")
+        .shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED + 1, reshuffle_each_iteration=True)
         .repeat()
         .batch(BATCH_SIZE)
         .prefetch(tf.data.AUTOTUNE)
     )
-    val_ds = full_ds.skip(train_size).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    val_ds = (
+        full_ds.skip(train_size)
+        .cache("./cache/cassava_fold2_val")
+        .batch(BATCH_SIZE)
+        .prefetch(tf.data.AUTOTUNE)
+    )
 
     print(f"  Cassava Fold 2 — Total: {total} | Train: {train_size} | Val: {total - train_size}")
     return train_ds, val_ds
+
 
 # Validate dataset integrity
 def validate_dataset(dataset, name, num_classes):
@@ -461,6 +499,7 @@ def validate_dataset(dataset, name, num_classes):
         assert images.shape[1:] == (IMG_SIZE, IMG_SIZE, 3), "Unexpected image shape!"
         assert labels.numpy().max() < num_classes, "Label index out of range!"
         print(f"SUCCESS: {name} is valid.")
+
 
 # Main Block
 if __name__ == "__main__":
@@ -493,7 +532,7 @@ if __name__ == "__main__":
 # 2. Paper states Adam but gives no learning rate, decay, or schedule, default
 #    starting value of 1e-3
 #
-# 3. Droout mentioned in the paper but never quantified, 0.5 assumed as default
+# 3. Dropout mentioned in the paper but never quantified, 0.5 assumed as default
 #
 # 4. The feature keys "image" and "label" are inferred from the standard TFDS plant_village schema.
 #    If parsing fails on a fresh download, inspect the tfrecord with:

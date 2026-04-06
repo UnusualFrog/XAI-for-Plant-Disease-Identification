@@ -5,6 +5,7 @@ Replication - Model Training
 import os
 # Disable cuDNN algorithm autotuning to save GPU memory
 os.environ["TF_CUDNN_USE_AUTOTUNE"] = "0"
+import gc
 import json
 import numpy as np
 import matplotlib
@@ -48,7 +49,16 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Helper functions
 
-# Callback function for saving best model version, saving training logs to csv, and learning rate reduction in training
+# Release dataset memory, TF graph state, and Python heap between training runs
+# Prevents RAM accumulation when loading multiple datasets sequentially
+def _cleanup(*datasets):
+    for ds in datasets:
+        del ds
+    tf.keras.backend.clear_session()
+    gc.collect()
+
+# Callback function for saving best model version, saving training logs to csv,
+# and reducing learning rate on plateau during training
 def make_callbacks(dataset_name, monitor="val_accuracy", tag=None):
     # tag allows fold2 outputs to use a distinct filename
     filename = f"{dataset_name}_{tag}" if tag else dataset_name
@@ -169,7 +179,7 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes, steps_per_epoch, 
     print(f"Training on {label} ({num_classes} classes)")
     print(f"{'='*60}")
 
-    # Build and complile blank model
+    # Build and compile blank model
     model = build_model(num_classes=num_classes, dropout_rate=DROPOUT_RATE)
     model = compile_model(model)
     # Use val_loss for cassava to address class imbalance
@@ -187,7 +197,7 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes, steps_per_epoch, 
 
     plot_history(history, dataset_name, tag=tag)
 
-    # Load best model for evaluation
+    # Load best model checkpoint for evaluation
     filename = f"{dataset_name}_{tag}" if tag else dataset_name
     best_path = os.path.join(OUTPUT_DIR, f"best_{filename}.keras")
     if os.path.exists(best_path):
@@ -196,11 +206,12 @@ def train_dataset(dataset_name, train_ds, val_ds, num_classes, steps_per_epoch, 
     summary = evaluate_and_report(model, val_ds, dataset_name, num_classes, tag=tag)
     return summary
 
+
 # Train model on each dataset
 def run_training():
     all_summaries = {}
 
-    # PlantVillage
+    # --- PlantVillage ---
     pv_train, pv_val, pv_total = load_plantvillage()
     pv_train_size = int(pv_total * 0.8) // BATCH_SIZE
     all_summaries["plantvillage"] = train_dataset(
@@ -208,8 +219,9 @@ def run_training():
         NUM_CLASSES["plantvillage"],
         steps_per_epoch=pv_train_size,
     )
+    _cleanup(pv_train, pv_val)
 
-    # Rice
+    # --- Rice ---
     rice_train, rice_val = load_rice()
     # 80/20 split in batches of 16
     rice_train_size = int(5932 * 0.8) // BATCH_SIZE
@@ -218,8 +230,9 @@ def run_training():
         NUM_CLASSES["rice"],
         steps_per_epoch=rice_train_size,
     )
+    _cleanup(rice_train, rice_val)
 
-    # Cassava
+    # --- Cassava ---
     cassava_train, cassava_val = load_cassava()
     # 80/20 split in batches of 16
     cassava_train_size = int(5656 * 0.8) // BATCH_SIZE
@@ -228,6 +241,7 @@ def run_training():
         NUM_CLASSES["cassava"],
         steps_per_epoch=cassava_train_size,
     )
+    _cleanup(cassava_train, cassava_val)
 
     # Final summary across all datasets compared against paper targets
     print("\n" + "=" * 60)
@@ -238,8 +252,7 @@ def run_training():
         "rice": 0.9966,
         "cassava": 0.7659,
     }
-    
-    # Validate summary results
+
     for name, summary in all_summaries.items():
         target = paper_targets[name]
         delta = summary["accuracy"] - target
@@ -249,14 +262,15 @@ def run_training():
     with open(os.path.join(OUTPUT_DIR, "final_summary.json"), "w") as f:
         json.dump(all_summaries, f, indent=2)
 
-    print("\n Training complete. Results saved to ./outputs/")
+    print("\nTraining complete. Results saved to ./outputs/")
     return all_summaries
 
-# Run independent 80/20 split for lightweight validation
+
+# Run independent 80/20 split for lightweight stability validation
 def run_fold2():
     fold2_summaries = {}
 
-    # Load dataset with second-fold shuffle for validation 
+    # --- PlantVillage Fold 2 ---
     pv_train, pv_val, pv_total = load_plantvillage_fold2()
     fold2_summaries["plantvillage"] = train_dataset(
         "plantvillage", pv_train, pv_val,
@@ -264,8 +278,9 @@ def run_fold2():
         steps_per_epoch=int(pv_total * 0.8) // BATCH_SIZE,
         tag="fold2",
     )
+    _cleanup(pv_train, pv_val)
 
-    # Load dataset with second-fold shuffle for validation 
+    # --- Rice Fold 2 ---
     rice_train, rice_val = load_rice_fold2()
     fold2_summaries["rice"] = train_dataset(
         "rice", rice_train, rice_val,
@@ -273,8 +288,9 @@ def run_fold2():
         steps_per_epoch=int(5932 * 0.8) // BATCH_SIZE,
         tag="fold2",
     )
+    _cleanup(rice_train, rice_val)
 
-    # Load dataset with second-fold shuffle for validation 
+    # --- Cassava Fold 2 ---
     cassava_train, cassava_val = load_cassava_fold2()
     fold2_summaries["cassava"] = train_dataset(
         "cassava", cassava_train, cassava_val,
@@ -282,15 +298,16 @@ def run_fold2():
         steps_per_epoch=int(5656 * 0.8) // BATCH_SIZE,
         tag="fold2",
     )
+    _cleanup(cassava_train, cassava_val)
 
-    # Save second fold validation results to file
     with open(os.path.join(OUTPUT_DIR, "fold2_summary.json"), "w") as f:
         json.dump(fold2_summaries, f, indent=2)
 
-    print("\n Fold 2 complete. Results saved to ./outputs/")
+    print("\nFold 2 complete. Results saved to ./outputs/")
     return fold2_summaries
 
-# Compare results of two different validation folds
+
+# Compare accuracy stability across the two validation folds
 def compare_folds(fold1_summaries, fold2_summaries):
     print("\n" + "=" * 60)
     print("FOLD STABILITY COMPARISON (±5% threshold)")
@@ -312,8 +329,10 @@ def compare_folds(fold1_summaries, fold2_summaries):
             "delta": float(delta),
             "status": status,
         }
+
     with open(os.path.join(OUTPUT_DIR, "fold_comparison.json"), "w") as f:
         json.dump(comparison, f, indent=2)
+
 
 # Main Block
 if __name__ == "__main__":

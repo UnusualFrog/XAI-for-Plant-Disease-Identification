@@ -13,6 +13,8 @@ plant_disease_cnn_replication/outputs/**
 !plant_disease_cnn_replication/outputs/explain/shap/
 !plant_disease_cnn_replication/outputs/explain/shap/.gitkeep
 
+plant_disease_cnn_replication/backup_outputs/**
+
 # TFDS
 _tfds_logging/
 
@@ -28,3 +30,7 @@ __pycache__/
 # Dataset archives
 Rice Leaf Disease Images.7z
 cassava-disease.zip
+
+# Cache
+plant_disease_cnn_replication/cache/**
+!plant_disease_cnn_replication/cache/.gitkeep

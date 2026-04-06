@@ -410,7 +410,10 @@ def run_explainability(dataset_name, load_fn):
 
     model = load_model(dataset_name)
     # val_ds is a cached tf.data pipeline — safe to iterate multiple times
-    _, val_ds = load_fn()
+    if (dataset_name == "plantvillage"):
+        _, val_ds, _ = load_fn()
+    else:
+        _, val_ds = load_fn()
 
     images, labels = get_val_samples(val_ds, n=N_SAMPLES)
     print(f"  Extracted {len(images)} validation samples")
