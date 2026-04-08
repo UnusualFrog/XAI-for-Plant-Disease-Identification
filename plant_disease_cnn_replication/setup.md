@@ -53,3 +53,15 @@ TF version: 2.21.0
 GPU devices: [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
 Built with CUDA: True
 ```
+
+### Step 6 — Set TFDS directory in data_loading_01.py
+The script `data_loading_01.py` must have its `TFDS_DATA_DIR` variable path set explicitly to the desired path for downloading the plantvillage dataset
+
+```
+# CHANGE THIS TO DESIRED DOWNLOAD DIRECTORY ON LOCAL MACHINE
+TFDS_DATA_DIR = "C:\HDD\example\tensorflow_datasets"
+os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
+```
+
+### Step 7 — Running Scripts
+Scripts are intended to be run in the order denoted by the suffix of filename (i.e. data_loading_**01**.py). On initial setup, run each script once to verify working setup. Subseqeuent runs can skip `data_loading_01.py` and `model_02.py` and proceed directly to `train_03.py` for baseline model replication and then `explain_04.py` for the enhancement of the baseline through the added XAI techniques
