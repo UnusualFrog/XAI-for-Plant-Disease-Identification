@@ -1,3 +1,7 @@
+"""
+Enhacnement - Model Training
+"""
+
 import os
 import numpy as np
 import matplotlib
@@ -11,9 +15,6 @@ from lime import lime_image
 from skimage.segmentation import mark_boundaries
 
 # Cap GPU memory to leave headroom for model + SHAP graph.
-# Mirrors the cap in train_03.py. Without this, DeepExplainer.__init__
-# runs the full background batch through the model in one pass and
-# exhausts VRAM on the 2070 Super.
 gpus = tf.config.list_physical_devices("GPU")
 if gpus:
     tf.config.set_logical_device_configuration(
@@ -35,7 +36,7 @@ os.makedirs(f"{OUTPUT_DIR}/shap",    exist_ok=True)
 # Number of validation images to explain per dataset
 N_SAMPLES = 5
 
-
+# Load best performing epoch model
 def load_model(dataset_name):
     path = os.path.join(MODELS_DIR, f"best_{dataset_name}.keras")
     if not os.path.exists(path):
@@ -43,9 +44,8 @@ def load_model(dataset_name):
     print(f"  Loading {dataset_name} model from {path}")
     return tf.keras.models.load_model(path)
 
-
+# Extract n images and their true labels from the validation set.
 def get_val_samples(val_ds, n=N_SAMPLES):
-    """Extract n images and their true labels from the validation set."""
     images, labels = [], []
     for batch_imgs, batch_lbls in val_ds:
         for img, lbl in zip(batch_imgs, batch_lbls):
@@ -60,24 +60,11 @@ def get_val_samples(val_ds, n=N_SAMPLES):
 # GRAD-CAM
 # =============================================================================
 
+# Find the last Concatenate layer before GlobalAveragePooling2D.
+# Search Priority:
+#   1. Last Concatenate before GlobalAveragePooling2D (preferred)
+#   2. Last Conv2D before GlobalAveragePooling2D (fallback)
 def find_gradcam_target_layer(model):
-    """
-    Find the last Concatenate layer before GlobalAveragePooling2D.
-
-    In this architecture, the final Concatenate layer (end of
-    modified_reduction_b) merges all branch outputs into the last full
-    spatial feature map, making it the correct Grad-CAM target.
-
-    Avoids layer.output_shape entirely — that property is not reliably
-    available on models loaded from .keras files in TF2/Keras 3, where
-    output shapes are not reconstructed from the saved format and raise
-    AttributeError on every layer regardless of type. Type-based search
-    via isinstance is sufficient and always works on loaded models.
-
-    Search priority:
-      1. Last Concatenate before GlobalAveragePooling2D (preferred)
-      2. Last Conv2D before GlobalAveragePooling2D (fallback)
-    """
     pre_gap_layers = []
     for layer in model.layers:
         if isinstance(layer, tf.keras.layers.GlobalAveragePooling2D):
@@ -90,13 +77,13 @@ def find_gradcam_target_layer(model):
             "Check that the model loaded correctly."
         )
 
-    # Priority 1: last Concatenate layer — captures merged multi-branch output
+    # Priority 1: last Concatenate layer captures merged multi-branch output
     for layer in reversed(pre_gap_layers):
         if isinstance(layer, tf.keras.layers.Concatenate):
             print(f"  Grad-CAM target layer: {layer.name}  (Concatenate)")
             return layer.name
 
-    # Priority 2: last Conv2D layer — fallback if no Concatenate found
+    # Priority 2: last Conv2D layer fallback if no Concatenate found
     for layer in reversed(pre_gap_layers):
         if isinstance(layer, tf.keras.layers.Conv2D):
             print(f"  Grad-CAM target layer: {layer.name}  (Conv2D fallback)")
@@ -107,14 +94,9 @@ def find_gradcam_target_layer(model):
         "GlobalAveragePooling2D. Model structure may be unexpected."
     )
 
-
+# Compute Grad-CAM heatmap for a single image.
+# Returns the heatmap and the class index used.
 def make_gradcam_heatmap(model, image, target_layer_name, class_idx=None):
-    """
-    Compute Grad-CAM heatmap for a single image.
-    If class_idx is None, uses the predicted class.
-    Returns the heatmap and the class index used.
-    """
-    # Sub-model that outputs both the target layer activations and the predictions
     grad_model = tf.keras.Model(
         inputs=model.inputs,
         outputs=[
@@ -134,8 +116,8 @@ def make_gradcam_heatmap(model, image, target_layer_name, class_idx=None):
     # Gradients of the class score with respect to the target layer output
     grads = tape.gradient(loss, conv_outputs)
 
-    # Defensive check — grads will be None if the target layer is not in the
-    # computation graph (e.g. wrong layer name or disconnected branch)
+    # Defensive check: grads will be None if the target layer is not in the
+    # computation graph (ex. wrong layer name or disconnected branch)
     if grads is None:
         raise ValueError(
             f"Grad-CAM gradient is None for layer '{target_layer_name}'. "
@@ -154,9 +136,8 @@ def make_gradcam_heatmap(model, image, target_layer_name, class_idx=None):
     heatmap = tf.maximum(heatmap, 0) / (tf.math.reduce_max(heatmap) + 1e-8)
     return heatmap.numpy(), int(class_idx)
 
-
+# Overlay Grad-CAM heatmap on the original image and save.
 def save_gradcam(image, heatmap, dataset_name, sample_idx, true_label, pred_label):
-    """Overlay Grad-CAM heatmap on the original image and save."""
     # Resize heatmap to match image spatial dimensions
     heatmap_resized = cv2.resize(heatmap, (image.shape[1], image.shape[0]))
     # Convert heatmap to RGB jet colormap
@@ -183,7 +164,7 @@ def save_gradcam(image, heatmap, dataset_name, sample_idx, true_label, pred_labe
     plt.close()
     print(f"  Saved: {path}")
 
-
+# Generate Grad-CAM explanation
 def run_gradcam(model, images, labels, dataset_name):
     print(f"\n[Grad-CAM] {dataset_name}")
     target_layer = find_gradcam_target_layer(model)
@@ -196,23 +177,20 @@ def run_gradcam(model, images, labels, dataset_name):
 # LIME
 # =============================================================================
 
+# Generate LIME explanation
 def run_lime(model, images, labels, dataset_name):
     print(f"\n[LIME] {dataset_name}")
 
-    # LIME methodology parameters — report both values in the paper.
-    # num_samples: perturbed neighbourhood images generated per explanation.
-    # num_features: number of superpixels included in the explanation mask.
     LIME_NUM_SAMPLES = 1000
     LIME_NUM_FEATURES = 10
 
+    # Get prediction for image
     def predict_fn(imgs):
         return model.predict(tf.cast(imgs, tf.float32), verbose=0)
     explainer = lime_image.LimeImageExplainer(random_state=SEED)
 
+    # For each image produce explanation
     for i, (image, true_label) in enumerate(zip(images, labels)):
-        # num_samples: number of perturbed neighbourhood images generated
-        # num_features: number of superpixels shown in the explanation
-        # Both are methodology parameters and must be reported in the paper
         explanation = explainer.explain_instance(
             image.astype("double"),
             predict_fn,
@@ -222,8 +200,10 @@ def run_lime(model, images, labels, dataset_name):
             random_seed=SEED,
         )
 
+        # Get highest confidence prediction label
         pred_label = explanation.top_labels[0]
 
+        # Explanation with positive influence only
         temp, mask = explanation.get_image_and_mask(
             pred_label,
             positive_only=True,
@@ -231,6 +211,7 @@ def run_lime(model, images, labels, dataset_name):
             hide_rest=False,
         )
 
+        # Explanation with positive and negative influences
         temp_both, mask_both = explanation.get_image_and_mask(
             pred_label,
             positive_only=False,
@@ -238,17 +219,18 @@ def run_lime(model, images, labels, dataset_name):
             hide_rest=False,
         )
 
+        # Plot original image with postive only support and both positive and negative support
         fig, axes = plt.subplots(1, 3, figsize=(14, 4))
         axes[0].imshow(image)
         axes[0].set_title("Original")
         axes[0].axis("off")
         axes[1].imshow(mark_boundaries(temp, mask))
         axes[1].set_title(
-            f"LIME — Supporting Regions\nTrue: {true_label} | Pred: {pred_label}"
+            f"LIME: Supporting Regions\nTrue: {true_label} | Pred: {pred_label}"
         )
         axes[1].axis("off")
         axes[2].imshow(mark_boundaries(temp_both, mask_both))
-        axes[2].set_title("LIME — All Regions\n(green=support, red=contradict)")
+        axes[2].set_title("LIME: All Regions\n(green=support, red=contradict)")
         axes[2].axis("off")
 
         plt.tight_layout()
@@ -263,37 +245,23 @@ def run_lime(model, images, labels, dataset_name):
 # SHAP
 # =============================================================================
 
+# Generate SHAP explanation
 def run_shap(model, images, labels, val_ds, dataset_name):
     print(f"\n[SHAP] {dataset_name}")
 
     # SHAP runs on CPU to avoid VRAM exhaustion.
-    # DeepExplainer builds a full gradient computation graph at init time —
-    # not just a forward pass — and the combined footprint of the resident GPU
-    # model plus SHAP's internal graph exceeds available VRAM on the RTX 2070
-    # Super regardless of background size. CPU execution is acceptable here
-    # because SHAP only processes N_SAMPLES explanation images against a small
-    # background set — runtime is on the order of minutes, not hours.
-    # A separate CPU model instance is loaded so the GPU model used by
-    # Grad-CAM and LIME remains resident and unaffected.
     print("  Loading CPU model for SHAP...")
     model_path = os.path.join(MODELS_DIR, f"best_{dataset_name}.keras")
     with tf.device("/CPU:0"):
         cpu_model = tf.keras.models.load_model(model_path)
 
     # Build background dataset from validation samples that do NOT overlap
-    # with the explanation images.
-    #
-    # ORDERING ASSUMPTION: val_ds uses cache() and reshuffle_each_iteration=False,
-    # so iteration order is deterministic across calls within the same process.
-    # get_val_samples() takes the first N_SAMPLES images from val_ds, so skipping
-    # the first N_SAMPLES images here guarantees a non-overlapping background.
-    # If the pipeline is ever changed to allow reshuffling, this assumption breaks
-    # and images should be passed in directly to exclude them explicitly.
-    #
-    # 20 background samples — report in paper.
+    # with the explanation images
     SHAP_BACKGROUND_SIZE = 20
     background = []
     skipped = 0
+
+    # Loop through background images to generate baseline distribution
     for batch_imgs, _ in val_ds:
         for img in batch_imgs:
             if skipped < N_SAMPLES:
@@ -308,14 +276,7 @@ def run_shap(model, images, labels, val_ds, dataset_name):
     print(f"  Background samples collected: {len(background)}")
 
     with tf.device("/CPU:0"):
-        # GradientExplainer is used instead of DeepExplainer because this
-        # architecture uses DepthwiseConv2D, which has no entry in DeepExplainer's
-        # internal gradient registry (shap_DepthwiseConv2dNative is unregistered).
-        # GradientExplainer uses TF's native GradientTape autodiff and has no
-        # such registry, making it compatible with any TF-supported op including
-        # DepthwiseConv2D. Known TF2 instability with GradientExplainer applies
-        # only to GPU eager mode — CPU execution is stable.
-        # nsamples: number of background samples drawn per explanation — report in paper.
+        # GradientExplainer is used instead of DeepExplainer due to conflicts with DepthWiseConv2D and Deep Explainer
         explainer = shap.GradientExplainer(cpu_model, background)
         shap_values = explainer.shap_values(
             images.astype(np.float32),
@@ -323,40 +284,37 @@ def run_shap(model, images, labels, val_ds, dataset_name):
         )
 
     # GradientExplainer return format varies by SHAP version:
-    # - Older versions: list[n_classes] of [n_samples, H, W, C]
-    # - Newer versions: single ndarray of shape [n_samples, H, W, C, n_classes]
-    #   or [n_samples, H, W, C] for single-output models
-    # The isinstance check normalises both cases to list[n_classes].
     if isinstance(shap_values, np.ndarray):
         if shap_values.ndim == 5:
-            # Shape [n_samples, H, W, C, n_classes] — split on last axis
+            # Shape [n_samples, H, W, C, n_classes]: split on last axis
             shap_values = [shap_values[..., c] for c in range(shap_values.shape[-1])]
         else:
-            # Shape [n_samples, H, W, C] — single output, wrap in list
+            # Shape [n_samples, H, W, C]: single output, wrap in list
             shap_values = [shap_values]
     num_classes = len(shap_values)
 
+    # Loop through samples
     for i, (image, true_label) in enumerate(zip(images, labels)):
-        # Use GPU model for prediction to keep inference fast
+        # Use GPU model for prediction
         pred = model.predict(image[np.newaxis, ...], verbose=0)
         pred_label = int(np.argmax(pred))
 
-        # Local explanation — SHAP values for the predicted class only
-        # shap_values[pred_label] shape: [n_samples, H, W, C]
-        local_shap = shap_values[pred_label][i]        # shape: [H, W, C]
+        # Local explanation
+        local_shap = shap_values[pred_label][i] # shape: [H, W, C]
 
         # Summarise across colour channels for visualisation
-        local_shap_summary = np.mean(np.abs(local_shap), axis=-1)  # shape: [H, W]
+        local_shap_summary = np.mean(np.abs(local_shap), axis=-1) # shape: [H, W]
 
         fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
+        # Plot local explanation heatmap alongside original image
         axes[0].imshow(image)
         axes[0].set_title("Original")
         axes[0].axis("off")
 
         im = axes[1].imshow(local_shap_summary, cmap="hot")
         axes[1].set_title(
-            f"SHAP — Local Explanation\nTrue: {true_label} | Pred: {pred_label}"
+            f"SHAP: Local Explanation\nTrue: {true_label} | Pred: {pred_label}"
         )
         axes[1].axis("off")
         plt.colorbar(im, ax=axes[1], fraction=0.046)
@@ -375,7 +333,7 @@ def run_shap(model, images, labels, val_ds, dataset_name):
         plt.close()
         print(f"  Saved: {path}")
 
-    # Global explanation — mean absolute SHAP value across all samples and classes
+    # Global explanation
     mean_shap = np.mean(
         [np.mean(np.abs(shap_values[c]), axis=0) for c in range(num_classes)],
         axis=0
@@ -385,7 +343,7 @@ def run_shap(model, images, labels, val_ds, dataset_name):
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(mean_shap_summary, cmap="hot")
     ax.set_title(
-        f"SHAP — Global Mean |SHAP|\n{dataset_name} ({len(images)} samples)"
+        f"SHAP: Global Mean |SHAP|\n{dataset_name} ({len(images)} samples)"
     )
     ax.axis("off")
     plt.colorbar(im, ax=ax, fraction=0.046)
@@ -399,25 +357,25 @@ def run_shap(model, images, labels, val_ds, dataset_name):
     del cpu_model
 
 
-# =============================================================================
-# ENTRY POINT
-# =============================================================================
 
+# Produce explanations for Grad-CAM, LIME and SHAP
 def run_explainability(dataset_name, load_fn):
     print(f"\n{'='*60}")
-    print(f"Explainability — {dataset_name}")
+    print(f"Explainability: {dataset_name}")
     print(f"{'='*60}")
 
+    # Load model
     model = load_model(dataset_name)
-    # val_ds is a cached tf.data pipeline — safe to iterate multiple times
     if (dataset_name == "plantvillage"):
         _, val_ds, _ = load_fn()
     else:
         _, val_ds = load_fn()
 
+    # Load samples
     images, labels = get_val_samples(val_ds, n=N_SAMPLES)
     print(f"  Extracted {len(images)} validation samples")
 
+    # Generate explanations for each method
     run_gradcam(model, images, labels, dataset_name)
     run_lime(model, images, labels, dataset_name)
     # val_ds passed separately so SHAP can build a non-overlapping background
@@ -426,7 +384,7 @@ def run_explainability(dataset_name, load_fn):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Explainability — Grad-CAM, LIME, SHAP")
+    print("Explainability: Grad-CAM, LIME, SHAP")
     print("Hassan & Maji (2022) Replication")
     print("=" * 60)
 
@@ -434,4 +392,4 @@ if __name__ == "__main__":
     run_explainability("rice",         load_rice)
     run_explainability("cassava",      load_cassava)
 
-    print("\n✅ Explainability complete. Results saved to ./outputs/explain/")
+    print("\nSUCCESS: Explainability complete. Results saved to ./outputs/explain/")

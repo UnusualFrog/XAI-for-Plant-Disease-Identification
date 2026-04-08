@@ -356,17 +356,3 @@ if __name__ == "__main__":
         compare_folds(fold1, fold2)
     else:
         print(f"Invalid option '{choice}'.")
-
-
-# =============================================================================
-# REPLICATION GAPS
-# =============================================================================
-#
-# 1. Paper states Adam but gives no learning rate, decay,
-#    or schedule, using 1e-3 (Adam default)
-#
-# 2. Batch size not stated in paper, using 16
-#
-# 3. Dropout rate not stated, using 0.5.
-#
-# =============================================================================

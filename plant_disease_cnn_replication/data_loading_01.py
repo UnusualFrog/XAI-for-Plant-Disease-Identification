@@ -13,6 +13,7 @@ models = tf.keras.models
 Model = tf.keras.Model
 
 # Use HDD for TFDS
+# NOTE: Set this to the directory where the plantvillage dataset will exist locally
 TFDS_DATA_DIR = "/mnt/HDD T4T/tensorflow_datasets"
 os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
 
@@ -23,16 +24,13 @@ np.random.seed(SEED)
 
 # Global Hyperparameters
 IMG_SIZE = 256
-# Note: batch size absent from paper, default of 16 used
+# NOTE: batch size absent from paper, default of 16 used
 BATCH_SIZE = 16
 EPOCHS = 50
 TRAIN_SPLIT = 0.8
 VAL_SPLIT = 0.2
 
-# Shuffle buffer cap — prevents RAM exhaustion from full-dataset buffers.
-# At 256x256x3 float32 (~0.75 MB/image), buffer_size=total would require
-# ~14.5 GB for PlantVillage alone. 2000 images (~1.5 GB) gives adequate
-# shuffling quality without OOM risk.
+# Shuffle buffer cap prevents RAM exhaustion from full-dataset buffers.
 SHUFFLE_BUFFER = 2000
 
 # Dataset-specific class counts
@@ -47,7 +45,7 @@ os.makedirs("./cache", exist_ok=True)
 
 # =============================================================================
 # PLANTVILLAGE DATASET
-# Source: tensorflow_datasets — 'plant_village'
+# Source: tensorflow_datasets: 'plant_village'
 # Only corn, potato, and tomato subsets are used (17 classes)
 #
 # NOTE:
@@ -95,7 +93,7 @@ def _plantvillage_cache_exists():
              if f.endswith(".tfrecord-00000-of-00008")]
     return len(files) > 0
 
-# Build a static label remapping lookup table — runs entirely in the TF graph
+# Build a static label remapping lookup table which runs entirely in the TF graph
 # with no Python round-trips or GIL contention
 def _build_remap_table(old_to_new):
     return tf.lookup.StaticHashTable(
@@ -145,9 +143,9 @@ def _load_plantvillage_from_tfrecords():
     def filter_fn(image, label):
         return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
-    # Build a static lookup table — no Python callback, no GIL
+    # Build a static lookup table
     lookup_table = _build_remap_table(old_to_new)
-
+    
     def remap_label(image, label):
         new_label = lookup_table.lookup(label)
         return image, new_label
@@ -172,7 +170,7 @@ def load_plantvillage_full():
     print("Loading PlantVillage dataset (full)...")
 
     if _plantvillage_cache_exists():
-        print("  Cache found — reading tfrecords directly")
+        print("  Cache found, reading tfrecords directly")
         ds, label_names = _load_plantvillage_from_tfrecords()
 
         print("  Counting filtered samples...")
@@ -180,7 +178,7 @@ def load_plantvillage_full():
         print(f"  Filtered sample count: {total}")
 
     else:
-        print("  No cache found — downloading via TFDS...")
+        print("  No cache found, downloading via TFDS...")
         ds, info = tfds.load(
             "plant_village",
             split="train",
@@ -205,7 +203,7 @@ def load_plantvillage_full():
         def filter_fn(image, label):
             return tf.reduce_any(tf.equal(label, keep_indices_tensor))
 
-        # Build a static lookup table — no Python callback, no GIL
+        # Build a static lookup table
         lookup_table = _build_remap_table(old_to_new)
 
         def remap_label(image, label):
@@ -228,17 +226,12 @@ def load_plantvillage_full():
 
 
 # Loads plantvillage dataset and performs shuffled train/validate split
-# Cache is placed AFTER take/skip to avoid partial-read cache truncation.
-# Placing cache before take/skip triggers the TF warning:
-#   "dataset.cache().take(k)" discards the cache on each epoch because the
-#   iterator never fully reads it. The correct pattern is "take(k).cache()".
+# Cache is placed after take/skip to avoid partial-read cache truncation.
 def load_plantvillage():
     ds, total = load_plantvillage_full()
     train_size = int(total * TRAIN_SPLIT)
 
     # Stable one-time shuffle determines the train/val split boundary.
-    # SHUFFLE_BUFFER is used instead of total to prevent RAM exhaustion —
-    # full-dataset buffer at 256x256x3 float32 would require ~14.5 GB.
     ds = ds.shuffle(buffer_size=SHUFFLE_BUFFER, seed=SEED, reshuffle_each_iteration=False)
 
     # Cache placed after take/skip: each subset is read fully on first epoch
@@ -299,6 +292,7 @@ def load_rice():
 
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
 
+    # Get sample counts for split
     total = sum(1 for _ in full_ds)
     train_size = int(total * TRAIN_SPLIT)
 
@@ -363,6 +357,7 @@ def load_cassava():
 
     full_ds = full_ds.map(normalize, num_parallel_calls=tf.data.AUTOTUNE)
 
+    # Get sample counts for split
     total = sum(1 for _ in full_ds)
     train_size = int(total * TRAIN_SPLIT)
 
@@ -521,24 +516,3 @@ if __name__ == "__main__":
     validate_dataset(cassava_train, "Cassava", NUM_CLASSES["cassava"])
 
     print("\nSUCCESS: Data loading step complete. Proceed to model_02.py")
-
-
-# =============================================================================
-# REPLICATION GAPS
-# =============================================================================
-#
-# 1. Batch size not stated in the paper, using 16 as default
-#
-# 2. Paper states Adam but gives no learning rate, decay, or schedule, default
-#    starting value of 1e-3
-#
-# 3. Dropout mentioned in the paper but never quantified, 0.5 assumed as default
-#
-# 4. The feature keys "image" and "label" are inferred from the standard TFDS plant_village schema.
-#    If parsing fails on a fresh download, inspect the tfrecord with:
-#       import tensorflow as tf
-#       raw = next(iter(tf.data.TFRecordDataset([<path_to_shard>])))
-#       print(tf.train.Example.FromString(raw.numpy()))
-#    and update feature_description in _load_plantvillage_from_tfrecords().
-#
-# =============================================================================

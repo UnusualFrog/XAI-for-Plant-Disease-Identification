@@ -30,7 +30,7 @@ def conv_bn_relu(x, filters, kernel_size, strides=1, padding="same"):
 # followed by pointwise 1x1 convolution with batch norm and ReLU
 # Reduces parameter count compared to standard convolution
 def depthwise_separable_bn_relu(x, filters, kernel_size, strides=1, padding="same"):
-    # Depthwise convolution — convolves channels independently
+    # Depthwise convolution convolves channels independently
     x = layers.DepthwiseConv2D(kernel_size, strides=strides,
                                 padding=padding, use_bias=False,
                                 depthwise_initializer="he_normal")(x)
@@ -74,7 +74,7 @@ def modified_inception_a(x, filters_1x1, filters_3x3_reduce, filters_3x3,
     # Concatenate all output of branches
     out = layers.Concatenate()([b1, b2, b3, b4])
 
-    # Residual connection — aligns channels with 1×1 conv if necessary
+    # Residual connection aligns channels with 1×1 conv if necessary
     total_filters = filters_1x1 + filters_3x3 + filters_5x5 + filters_pool
     input_channels = residual.shape[-1]
     if input_channels != total_filters:
@@ -118,7 +118,7 @@ def modified_inception_b(x, filters_1x1, filters_7x7_reduce, filters_7x7,
     # Concatenate all branches
     out = layers.Concatenate()([b1, b2, b3, b4])
 
-    # Residual connection — align channels if necessary
+    # Residual connection align channels if necessary
     total_filters = filters_1x1 + filters_7x7 + filters_7x7_dbl + filters_pool
     input_channels = residual.shape[-1]
     if input_channels != total_filters:
@@ -190,7 +190,7 @@ def build_model(num_classes, input_shape=(256, 256, 3), dropout_rate=0.5):
     # 1. Input
     inputs = layers.Input(shape=input_shape)
 
-    # 2. Entry flow — four depthwise separable convolutions with two max pools
+    # 2. Entry flow of four depthwise separable convolutions with two max pools
     x = depthwise_separable_bn_relu(inputs, 32, 3)
     x = depthwise_separable_bn_relu(x, 64, 3)
     x = layers.MaxPooling2D(3, strides=2, padding="same")(x)
@@ -270,21 +270,3 @@ if __name__ == "__main__":
     print("\nBuilding model for Cassava (5 classes)...")
     model_cassava = build_model(num_classes=5)
     print(f"Cassava model params: {model_cassava.count_params():,}")
-
-
-# =============================================================================
-# REPLICATION GAPS
-# =============================================================================
-# 1. The authors state the parameter count (428,100) but never publish the
-#    filter counts per block that produce it.
-#
-# 2. The paper reports 11,808 parameters for the modified Inception A block,
-#    but this figure was computed with an unknown input channel depth 
-#    determined by the undisclosed entry flow configuration
-#
-# 3. No dropout rate stated in paper default here is 0.5
-#
-# 4. Paper does not state reduction block stride values explicitly.
-#    Stride of 2 is used in both reduction blocks to halve spatial dimensions,
-#    which is standard for reduction blocks in Inception
-# =============================================================================
