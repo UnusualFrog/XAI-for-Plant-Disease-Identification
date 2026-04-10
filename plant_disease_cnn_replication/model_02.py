@@ -156,19 +156,19 @@ def modified_reduction_a(x, filters_3x3_reduce, filters_3x3,
 
 # Reduction Block B
 # Further reduces spatial dimensions of feature map with downsampling
-def modified_reduction_b(x, filters_3x3_reduce, filters_3x3,
-                          filters_7x7_reduce, filters_7x7, filters_pool):
+def modified_reduction_b(x, filters_b2_reduce, filters_b2,
+                          filters_b3_reduce, filters_b3, filters_pool):
     # Branch 1: 3×3 max-pool (stride 2)
     b1 = layers.MaxPooling2D(3, strides=2, padding="same")(x)
     b1 = conv_bn_relu(b1, filters_pool, 1)
 
     # Branch 2: 1×1 conv to 3×3 depthwise separable conv (stride 2)
-    b2 = conv_bn_relu(x, filters_3x3_reduce, 1)
-    b2 = depthwise_separable_bn_relu(b2, filters_3x3, 3, strides=2)
+    b2 = conv_bn_relu(x, filters_b2_reduce, 1)
+    b2 = depthwise_separable_bn_relu(b2, filters_b2, 3, strides=2)
 
     # Branch 3: 1×1 conv to 3×3 depthwise separable conv (stride 2)
-    b3 = conv_bn_relu(x, filters_7x7_reduce, 1)
-    b3 = depthwise_separable_bn_relu(b3, filters_7x7, 3, strides=2)
+    b3 = conv_bn_relu(x, filters_b3_reduce, 1)
+    b3 = depthwise_separable_bn_relu(b3, filters_b3, 3, strides=2)
 
     out = layers.Concatenate()([b1, b2, b3])
     return out
@@ -229,8 +229,8 @@ def build_model(num_classes, input_shape=(256, 256, 3), dropout_rate=0.5):
     # 6. Reduction B
     x = modified_reduction_b(
         x,
-        filters_3x3_reduce=64, filters_3x3=128,
-        filters_7x7_reduce=64, filters_7x7=128,
+        filters_b2_reduce=64, filters_b2=128,
+        filters_b3_reduce=64, filters_b3=128,
         filters_pool=64,
     )
 

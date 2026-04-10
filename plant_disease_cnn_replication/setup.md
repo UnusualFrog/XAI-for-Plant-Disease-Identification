@@ -1,14 +1,53 @@
 ## Project Setup
+NOTE: For windows installation, WSL will need to be used, as Linux-speicfic packages are requried, all following commands should be performed using WSL
 
 ### Step 1 — Manually Download datasets
 The rice disease and cassava disease datasets must be downloaded manually and placed in the following directories:
-- `./plant_disease_cnn_replication/data/cassava_data`
-- `.plant_disease_cnn_replication/data/rice_data`
+- `.\plant_disease_cnn_replication\data\cassava-disease`
+- `.\plant_disease_cnn_replication\data\rice_data`
 
 Links to datasets:
 - Rice: https://data.mendeley.com/datasets/fwcj7stb8r/1
 - Cassava: https://www.kaggle.com/competitions/cassava-disease/data 
+
+### Step 2 — Fix Directory Formatting
+Datasets should be fomratted as follows. 
+- Rice dataset parent folder will need to be renamed to `rice_data`
+- Rice classes will need to be renamed as below:
+
+```
+# RICE DATASET
+# Expected folder structure:
+#   rice_data/
+#     bacterial_blight/   (1584 images)
+#     blast/              (1440 images)
+#     brown_spot/         (1600 images)
+#     tungro/             (1308 images)
+```
+
+- Cassava dataset uses `train.zip` only
+- Parent folder `train` within `train.zip` must be renamed to `cassava_data`
+- Cassava classes should be renamed as below:
+
+```
+# CASSAVA DATASET
+# Expected folder structure:
+#   cassava_data/
+#     Healthy/                        (316 images)
+#     Cassava_Bacterial_Blight/       (466 images)
+#     Cassava_Brown_Streak_Disease/   (1443 images)
+#     Cassava_Green_Mite/             (773 images)
+#     Cassava_Mosaic_Disease/         (2658 images)
+```
  
+## Step 2 - Install Python
+Python version 3.12.3 must be used for this project. Install using the following commands
+
+```
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git python3 python3-pip python3-venv build-essential
+```
+
 ### Step 2 — Create and activate a virtual environment
  
 ```bash
@@ -67,10 +106,15 @@ Built with CUDA: True
 The script `data_loading_01.py` must have its `TFDS_DATA_DIR` variable path set explicitly to the desired path for downloading the plantvillage dataset
 
 ```
+# Optionally create TFDS directory
+mkdir -p ~/tensorflow_datasets
+
 # CHANGE THIS TO DESIRED DOWNLOAD DIRECTORY ON LOCAL MACHINE
-TFDS_DATA_DIR = "C:\HDD\example\tensorflow_datasets"
+TFDS_DATA_DIR = "/home/regan/tensorflow_datasets"
 os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
 ```
 
 ### Step 8 — Running Scripts
 Scripts are intended to be run in the order denoted by the suffix of filename (i.e. data_loading_**01**.py). On initial setup, run each script once to verify working setup. Subseqeuent runs can skip `data_loading_01.py` and `model_02.py` and proceed directly to `train_03.py` for baseline model replication and then `explain_04.py` for the enhancement of the baseline through the added XAI techniques
+
+NOTE: For windows users, ensure scripts are run through WSL
